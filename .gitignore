@@ -1,0 +1,12 @@
+# Python virtual environment / portable installation
+venv/
+python/
+.venv/
+env/
+
+# CSV data files
+*.csv
+
+# Python cache
+__pycache__/
+*.pyc
