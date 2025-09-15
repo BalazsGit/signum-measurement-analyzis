@@ -4,6 +4,15 @@ python/
 .venv/
 env/
 
+# Generated reports
+report/
+
+# assets directory
+assets/
+
+# Measurement data files
+measurements/
+
 # CSV data files
 *.csv
 
