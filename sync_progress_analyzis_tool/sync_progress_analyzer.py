@@ -33,9 +33,36 @@ from plotly.subplots import make_subplots
 import os
 import webbrowser
 import traceback
+import re
+
+# --- Monkey-patching for older Dash versions ---
+# This is a workaround for older Dash versions where 'loading_state' might not be
+# a registered property on all components, causing validation errors.
+# This dynamically adds the property to the component's list of known props.
+# It's safe to run even on newer versions where the property already exists.
+try:
+    # The property name list can be either `_prop_names` or `prop_names`
+    # depending on the Dash version. We try both.
+    prop_names_attr = None
+    if hasattr(dcc.Graph, '_prop_names'):
+        prop_names_attr = '_prop_names'
+    elif hasattr(dcc.Graph, 'prop_names'):
+        prop_names_attr = 'prop_names'
+
+    if prop_names_attr:
+        prop_names = getattr(dcc.Graph, prop_names_attr)
+        if 'loading_state' not in prop_names:
+            prop_names.append('loading_state')
+            print("Info: Monkey-patched dcc.Graph to support 'loading_state'.")
+except Exception as e:
+    print(f"Warning: Could not monkey-patch dcc.Graph for loading_state: {e}. The loading overlay might not work if you are on an old version of Dash.")
+
+# --- SCRIPT DIRECTORY ---
+# Use the real path to resolve any symlinks and get the directory of the script
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 # --- CSS and Asset Management ---
-DROPDOWN_CSS = """
+CUSTOM_CSS = """
 /*
   HIGH-SPECIFICITY DROPDOWN OVERRIDE
   Targets dropdowns by ID to ensure these styles have the highest priority.
@@ -43,98 +70,190 @@ DROPDOWN_CSS = """
 */
 
 /* --- Dropdown Control (the main input box) --- */
-#start-block-dropdown .Select-control,
-#end-block-dropdown .Select-control,
-#start-block-dropdown .Select__control,
-#end-block-dropdown .Select__control {
-    background-color: var(--bs-body-bg) !important;
-    border: 1px solid var(--bs-border-color) !important;
+[id*='"type":"start-block-dropdown"'] .Select-control,
+[id*='"type":"end-block-dropdown"'] .Select-control,
+[id*='"type":"start-block-dropdown"'] .Select__control,
+[id*='"type":"end-block-dropdown"'] .Select__control {
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 
 /* --- Text inside the dropdown (selected value, input) --- */
-#start-block-dropdown .Select-value, 
-#end-block-dropdown .Select-value,
-#start-block-dropdown .Select-value-label, 
-#end-block-dropdown .Select-value-label,
-#start-block-dropdown .Select-input > input,
-#end-block-dropdown .Select-input > input,
-#start-block-dropdown .Select__single-value,
-#end-block-dropdown .Select__single-value,
-#start-block-dropdown .Select__input-container,
-#end-block-dropdown .Select__input-container {
+[id*='"type":"start-block-dropdown"'] .Select-value, 
+[id*='"type":"end-block-dropdown"'] .Select-value,
+[id*='"type":"start-block-dropdown"'] .Select-value-label, 
+[id*='"type":"end-block-dropdown"'] .Select-value-label,
+[id*='"type":"start-block-dropdown"'] .Select-input > input,
+[id*='"type":"end-block-dropdown"'] .Select-input > input,
+[id*='"type":"start-block-dropdown"'] .Select__single-value,
+[id*='"type":"end-block-dropdown"'] .Select__single-value,
+[id*='"type":"start-block-dropdown"'] .Select__input-container,
+[id*='"type":"end-block-dropdown"'] .Select__input-container {
     color: var(--bs-body-color) !important;
 }
 
+/* --- Right-align selected value in dropdowns --- */
+/* This aligns the selected value and the input text to the right for consistency. */
+[id*='"type":"start-block-dropdown"'] .Select-value,
+[id*='"type":"end-block-dropdown"'] .Select-value,
+[id*='"type":"start-block-dropdown"'] .Select__value-container,
+[id*='"type":"end-block-dropdown"'] .Select__value-container {
+    text-align: right;
+    margin-right: 15px; /* Add margin to create space between the text container and the arrow */
+}
+
 /* --- The dropdown menu container --- */
-#start-block-dropdown .Select-menu-outer,
-#end-block-dropdown .Select-menu-outer,
-#start-block-dropdown .Select__menu,
-#end-block-dropdown .Select__menu {
+[id*='"type":"start-block-dropdown"'] .Select-menu-outer,
+[id*='"type":"end-block-dropdown"'] .Select-menu-outer,
+[id*='"type":"start-block-dropdown"'] .Select__menu,
+[id*='"type":"end-block-dropdown"'] .Select__menu {
     background-color: var(--bs-body-bg) !important;
     border: 1px solid var(--bs-border-color) !important;
 }
 
 /* --- Individual options in the dropdown --- */
-#start-block-dropdown .Select-option,
-#end-block-dropdown .Select-option,
-#start-block-dropdown .Select__option,
-#end-block-dropdown .Select__option {
+[id*='"type":"start-block-dropdown"'] .Select-option,
+[id*='"type":"end-block-dropdown"'] .Select-option,
+[id*='"type":"start-block-dropdown"'] .Select__option,
+[id*='"type":"end-block-dropdown"'] .Select__option {
     background-color: var(--bs-body-bg) !important;
     color: var(--bs-body-color) !important;
 }
 
 /* --- Focused option (hover) --- */
-#start-block-dropdown .Select-option.is-focused,
-#end-block-dropdown .Select-option.is-focused,
-#start-block-dropdown .Select__option--is-focused,
-#end-block-dropdown .Select__option--is-focused {
+[id*='"type":"start-block-dropdown"'] .Select-option.is-focused,
+[id*='"type":"end-block-dropdown"'] .Select-option.is-focused,
+[id*='"type":"start-block-dropdown"'] .Select__option--is-focused,
+[id*='"type":"end-block-dropdown"'] .Select__option--is-focused {
     background-color: var(--bs-primary) !important;
     color: white !important;
 }
 
 /* --- Selected option --- */
-#start-block-dropdown .Select-option.is-selected,
-#end-block-dropdown .Select-option.is-selected,
-#start-block-dropdown .Select__option--is-selected,
-#end-block-dropdown .Select__option--is-selected {
+[id*='"type":"start-block-dropdown"'] .Select-option.is-selected,
+[id*='"type":"end-block-dropdown"'] .Select-option.is-selected,
+[id*='"type":"start-block-dropdown"'] .Select__option--is-selected,
+[id*='"type":"end-block-dropdown"'] .Select__option--is-selected {
     background-color: var(--bs-secondary-bg) !important;
     color: var(--bs-body-color) !important; /* Ensure text is visible on selection */
 }
 
 /* --- Placeholder text --- */
-#start-block-dropdown .Select--single > .Select-control .Select-placeholder,
-#end-block-dropdown .Select--single > .Select-control .Select-placeholder,
-#start-block-dropdown .Select__placeholder,
-#end-block-dropdown .Select__placeholder {
+[id*='"type":"start-block-dropdown"'] .Select--single > .Select-control .Select-placeholder,
+[id*='"type":"end-block-dropdown"'] .Select--single > .Select-control .Select-placeholder,
+[id*='"type":"start-block-dropdown"'] .Select__placeholder,
+[id*='"type":"end-block-dropdown"'] .Select__placeholder {
     color: var(--bs-secondary-color) !important;
+    text-align: left; /* Override right-alignment for placeholder text */
 }
 
 /* --- Arrow and Separator --- */
-#start-block-dropdown .Select-arrow,
-#end-block-dropdown .Select-arrow {
+[id*='"type":"start-block-dropdown"'] .Select-arrow,
+[id*='"type":"end-block-dropdown"'] .Select-arrow {
     border-color: var(--bs-body-color) transparent transparent !important;
 }
 
-#start-block-dropdown .Select__indicator-separator,
-#end-block-dropdown .Select__indicator-separator {
+[id*='"type":"start-block-dropdown"'] .Select__indicator-separator,
+[id*='"type":"end-block-dropdown"'] .Select__indicator-separator {
     background-color: var(--bs-border-color) !important;
 }
 
-#start-block-dropdown .Select__indicator,
-#end-block-dropdown .Select__indicator,
-#start-block-dropdown .Select__dropdown-indicator,
-#end-block-dropdown .Select__dropdown-indicator {
+[id*='"type":"start-block-dropdown"'] .Select__indicator,
+[id*='"type":"end-block-dropdown"'] .Select__indicator,
+[id*='"type":"start-block-dropdown"'] .Select__dropdown-indicator,
+[id*='"type":"end-block-dropdown"'] .Select__dropdown-indicator {
     color: var(--bs-secondary-color) !important;
+}
+
+/* --- Metadata Input Fields (New Property / Value) --- */
+/* This ensures the text inputs in the metadata cards follow the theme. */
+input[id*='"type":"metadata-key-input"'],
+input[id*='"type":"metadata-value-input"'] {
+#original-metadata-display .form-control,
+#compare-metadata-display .form-control {
+    background-color: var(--bs-body-bg) !important;
+    color: var(--bs-body-color) !important;
+    border: 1px solid var(--bs-border-color) !important;
+}
+
+input[id*='"type":"metadata-key-input"']::placeholder,
+input[id*='"type":"metadata-value-input"']::placeholder {
+#original-metadata-display .form-control::placeholder,
+#compare-metadata-display .form-control::placeholder {
+    color: var(--bs-secondary-color) !important;
+}
+
+/* --- Custom Checklist (for Save Filtered Range) --- */
+/* This ensures the checkbox and its label follow the theme. */
+.custom-checklist label {
+    color: var(--bs-body-color) !important;
+    display: inline-flex; /* Align label and custom checkbox */
+    align-items: center;
+    cursor: pointer;
+}
+
+.custom-checklist input[type="checkbox"] {
+    /* Modern way to style the checkbox tick and border */
+    accent-color: var(--bs-primary);
+    /* Fallback for older browsers - basic theming */
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    
+    width: 1.15em;
+    height: 1.15em;
+    
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.25em;
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    
+    display: inline-block;
+    vertical-align: middle;
+    position: relative;
+    cursor: pointer;
+    margin-right: 0.3em;
+}
+
+.custom-checklist input[type="checkbox"]:checked {
+    background-color: var(--bs-primary);
+    border-color: var(--bs-primary);
+}
+
+/* The checkmark */
+.custom-checklist input[type="checkbox"]:checked::before {
+    content: '✔';
+    position: absolute;
+    color: white;
+    font-size: 0.9em;
+    font-weight: bold;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    line-height: 1;
 }
 """
 
-def setup_assets_folder():
-    """Creates the assets folder and the required CSS file if they don't exist."""
-    assets_dir = "assets"
+def setup_directories():
+    """Creates necessary directories if they don't exist."""
+    # Assets directory for CSS
+    assets_dir = os.path.join(SCRIPT_DIR, "assets")
     if not os.path.isdir(assets_dir):
         os.makedirs(assets_dir)
-    with open(os.path.join(assets_dir, "dropdown_styles.css"), "w", encoding="utf-8") as f:
-        f.write(DROPDOWN_CSS)
+    with open(os.path.join(assets_dir, "custom_styles.css"), "w", encoding="utf-8") as f:
+        f.write(CUSTOM_CSS)
+
+    # Measurements directory for CSV files
+    measurements_dir = os.path.join(SCRIPT_DIR, "measurements")
+    if not os.path.isdir(measurements_dir):
+        os.makedirs(measurements_dir)
+        print(f"Info: Created 'measurements' directory at: {measurements_dir}")
+
+    # Directory for saved files with updated metadata
+    saved_dir = os.path.join(measurements_dir, "saved")
+    if not os.path.isdir(saved_dir):
+        os.makedirs(saved_dir)
 
 # --- Helper Functions ---
 def find_header_row(lines):
@@ -164,8 +283,33 @@ def extract_metadata(lines):
                 metadata[parts[0]] = parts[1]
     return metadata
 
+def load_csv_from_path(filepath):
+    """Reads a CSV file from a given path and returns data for the store or an error feedback."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        header_row = find_header_row(lines)
+        metadata = extract_metadata(lines)
+        df = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=';')
+        df.columns = df.columns.str.strip()
+
+        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
+        if not all(col in df.columns for col in required_cols):
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            raise ValueError(f"The file is missing essential columns: {', '.join(missing_cols)}.")
+
+        store_data = {'filename': filepath, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        feedback = {'title': 'File Reloaded', 'body': f"Successfully reloaded '{os.path.basename(filepath)}'."}
+        return store_data, feedback
+    except Exception as e:
+        print(f"Error parsing file from path: {filepath}. Error: {e}")
+        error_message = f"Failed to reload '{os.path.basename(filepath)}'.\n\nError: {e}"
+        feedback = {'title': 'Reload Failed', 'body': error_message}
+        return None, feedback
+
 initial_metadata = {}
-initial_csv_path = os.path.join("measurements", "sync_progress.csv")
+initial_csv_path = os.path.join(SCRIPT_DIR, "measurements", "sync_progress.csv")
 try:
     with open(initial_csv_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
@@ -173,6 +317,7 @@ try:
     initial_metadata = extract_metadata(lines)
     # Pass only the relevant lines to pandas, starting from the header
     df_progress = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=";")
+    df_progress.columns = df_progress.columns.str.strip()
 except FileNotFoundError:
     df_progress = pd.DataFrame()
     print(f"Info: {initial_csv_path} not found. Please upload a file or place it in the 'measurements' directory to begin analysis.")
@@ -296,7 +441,7 @@ tooltip_texts = {
     },
     'Clear CSV': {
         'title': 'Clear CSV',
-        'body': "This button filters the currently loaded CSV data, keeping only the header, the first data row (block 0), and every 5000th block thereafter. This action creates a new, smaller CSV file with a `_cleared.csv` suffix in the application's root directory. The filtered data is also used for the current session, which can improve performance and make long-term trends easier to see. This action applies to both the original and comparison files if both are loaded."
+        'body': "This button filters the currently loaded CSV data in memory, keeping only the header, the first data row (block 0), and every 5000th block thereafter. This action does not affect the original file on disk but updates the current session's data, which can improve performance and make long-term trends easier to see. All metadata is preserved. To save the filtered data, use the 'Save' or 'Save As...' buttons."
     },
     'Block Height': {
         'title': 'Block Height',
@@ -313,6 +458,18 @@ tooltip_texts = {
     'Sync Speed (Blocks/sec)': {
         'title': 'Sync Speed (Blocks/sec Instantaneous)',
         'body': "The instantaneous synchronization speed, calculated as the number of blocks processed since the last data point, divided by the time elapsed during that interval. This metric shows the node's performance at a specific moment and can fluctuate based on network conditions and block complexity."
+    },
+    'Save Filtered Range': {
+        'title': 'Save Filtered Range',
+        'body': "If checked, only the data within the currently selected block range (defined by the 'Start Block Height' and 'End Block Height' dropdowns) will be included in the saved CSV file. If unchecked, the entire dataset for the file will be saved, ignoring the block range filter."
+    },
+    'Save': {
+        'title': 'Save',
+        'body': "Saves the current state of the data (including any added or modified metadata and filtering) by overwriting the corresponding file in the `measurements/saved` directory. The filename will be kept consistent, without adding a new timestamp. Use this to update an existing saved file."
+    },
+    'Save As...': {
+        'title': 'Save As...',
+        'body': "Saves the current state of the data as a new CSV file in the `measurements/saved` directory. A timestamp and a unique sequence number will be appended to the filename to prevent overwriting previous saves. Use this to create a new version of the file while preserving the old one."
     }
 }
 
@@ -340,6 +497,10 @@ def filter_df_for_clearing(df):
 
 def create_combined_summary_table(df_original, df_compare, title_original, title_compare):
     """Creates a Dash component with a combined summary table of sync metrics."""
+
+    # If no data is present at all, return nothing.
+    if df_original.empty and df_compare.empty:
+        return None
 
     def get_stats_dict(df):
         """Helper to calculate stats for a single dataframe, returning both display and raw values."""
@@ -384,16 +545,27 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
             'Skewness of Sync Speed (Blocks/sec sample)': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0}
         }
 
-    stats_original = get_stats_dict(df_original)
+    has_original = not df_original.empty
     has_comparison = not df_compare.empty
 
-    metric_names = list(stats_original.keys())
+    stats_original = get_stats_dict(df_original) if has_original else {}
+    stats_compare = get_stats_dict(df_compare) if has_comparison else {}
 
-    header_cells = [html.Th("Metric"), html.Th(title_original)]
+    # Use a fixed list of metrics to ensure consistent order and display
+    metric_names = [
+        'Total Sync in Progress Time', 'Total Blocks Synced', 'Overall Average Sync Speed (Blocks/sec)',
+        'Min Sync Speed (Blocks/sec sample)', 'Q1 Sync Speed (Blocks/sec sample)',
+        'Mean Sync Speed (Blocks/sec sample)', 'Median Sync Speed (Blocks/sec sample)',
+        'Q3 Sync Speed (Blocks/sec sample)', 'Max Sync Speed (Blocks/sec sample)',
+        'Std Dev of Sync Speed (Blocks/sec sample)', 'Skewness of Sync Speed (Blocks/sec sample)'
+    ]
+
+    header_cells = [html.Th("Metric")]
+    if has_original:
+        header_cells.append(html.Th(title_original))
     if has_comparison:
-        stats_compare = get_stats_dict(df_compare)
         header_cells.append(html.Th(title_compare))
-    
+
     table_header = [html.Thead(html.Tr(header_cells))]
     
     # Define which metrics are better when higher
@@ -413,31 +585,35 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     table_body_rows = []
     for metric in metric_names:
+        info = tooltip_texts.get(metric, {})
+        title = info.get('title', metric)
         if metric in tooltip_texts:
             info_icon = html.Span([
                 " ",
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
-                id={'type': 'info-icon', 'metric': metric},
+                id={'type': 'info-icon', 'metric': metric}, # type: ignore
+                n_clicks=0,
                 style={'cursor': 'pointer'},
                 title='Click for more info'
             )
-            metric_cell = html.Td([metric, info_icon])
+            metric_cell = html.Td([title, info_icon])
         else:
-            metric_cell = html.Td(metric)
+            metric_cell = html.Td(title)
             
         # Original value cell
-        original_val_display = stats_original.get(metric, {}).get('display', 'N/A')
-        row_cells = [metric_cell, html.Td(original_val_display)]
+        row_cells = [metric_cell]
+        if has_original:
+            original_val_display = stats_original.get(metric, {}).get('display', 'N/A')
+            row_cells.append(html.Td(original_val_display))
 
         # Comparison value cell (with difference)
         if has_comparison:
-            compare_val_display = stats_compare.get(metric, {}).get('display', 'N/A')
-            compare_cell_content = [compare_val_display]
-
             # Calculate and display difference
             original_raw = stats_original.get(metric, {}).get('raw')
             compare_raw = stats_compare.get(metric, {}).get('raw')
+            compare_val_display = stats_compare.get(metric, {}).get('display', 'N/A')
+            compare_cell_content = [compare_val_display]
 
             if original_raw is not None and compare_raw is not None:
                 diff = compare_raw - original_raw
@@ -533,31 +709,48 @@ app = dash.Dash(
 
 # --- Common Styles ---
 upload_style = {
-    'width': '100%', 'height': '40px', 'lineHeight': '40px',
-    'borderWidth': '1px', 'borderStyle': 'dotted', 'borderRadius': '5px',
+    'width': '100%',
+    'minHeight': '40px',  # Use minHeight instead of fixed height
+    'padding': '5px 10px',  # Internal padding for content
+    'display': 'flex',
+    'justifyContent': 'center',
+    'alignItems': 'center',
+    'borderWidth': '1px',
+    'borderStyle': 'dotted',
+    'borderRadius': '5px',
     'textAlign': 'center', 'margin': '10px 0', 'fontSize': 'small', 'color': 'grey'
 }
 
-# --- Run asset setup at startup ---
-setup_assets_folder()
+# --- Run directory setup at startup ---
+setup_directories()
 
 # --- App Layout ---
 app.layout = html.Div([
-    dcc.Store(id='tooltip-store', data=tooltip_texts),
-    dcc.Loading(
-        id="loading-save",
-        type="circle",
-        fullscreen=True,
-        children=html.Div(id="loading-output-for-save")
-    ),
+    # Custom, centered loading overlay
+    html.Div(id='loading-overlay', children=[
+        dbc.Spinner(size="lg", color="primary", spinner_style={"width": "3rem", "height": "3rem"}),
+        html.Br(),
+        html.Div("Loading...", id='loading-overlay-message', style={'color': 'var(--bs-body-color)'} )
+    ], className="bg-body bg-opacity-50", style={ # Use Bootstrap classes for theme-aware background
+        'position': 'fixed', 'top': 0, 'left': 0, 'width': '100%', 'height': '100%',
+        'display': 'none', 'justifyContent': 'center', 'alignItems': 'center',
+        'flexDirection': 'column', 'zIndex': 10000,
+    }),
+
+    dcc.Store(id='loading-state-store', data={'loading': False, 'message': ''}),
     dcc.Store(id='reports-filepath-store'),
     html.Link(id="theme-stylesheet", rel="stylesheet"),
     dcc.Store(id='theme-store', storage_type='local'),
     dbc.Container([
-    dcc.Store(id='tooltip-store', data=tooltip_texts),
+    # Ghost graph components (no longer used for loading overlay)
+    dcc.Graph(id='upload-callback-output', style={'display': 'none'}),
+    dcc.Graph(id='clear-callback-output', style={'display': 'none'}),
+    dcc.Graph(id='main-callback-output', style={'display': 'none'}),
+    dcc.Graph(id='save-callback-output', style={'display': 'none'}),
     dcc.Store(id='original-data-store', data=initial_original_data),
     dcc.Store(id='compare-data-store'), # No initial data for comparison
     dcc.Store(id='action-feedback-store'), # For modal feedback
+    dcc.Store(id='unsaved-changes-store', data={'Original': False, 'Comparison': False}),
     dcc.Store(id='html-content-store'), # For saving HTML content
         dbc.Row([
         dbc.Col(html.H1("Sync Progress Reports", className="mt-3 mb-4"), width="auto", className="me-auto"),
@@ -585,15 +778,17 @@ app.layout = html.Div([
                     style=upload_style,
                     multiple=False,
                 ), style={'flexGrow': 1}),
+                dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-original-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-original-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
-                html.Span([
+                html.Span([ # type: ignore
                     " ",
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                 ],
                     id={'type': 'info-icon', 'metric': 'Original File'}, # type: ignore
                     style={'cursor': 'pointer', 'marginLeft': '10px'},
                     title='Click for more info'
-                )
+                ,
+                n_clicks=0)
             ], style={'display': 'flex', 'alignItems': 'center'}, id='original-upload-container'),
             html.Div(id='original-metadata-display', className="mt-3")
         ]),
@@ -602,88 +797,49 @@ app.layout = html.Div([
                 html.Div(dcc.Upload(
                     id='upload-compare-progress',
                     children=html.Div(['Drag and Drop or ', html.A('Select Comparison sync_progress.csv')]),
-                    style=upload_style,
-                    multiple=False,
+                    style=upload_style, multiple=False
                 ), style={'flexGrow': 1}),
+                dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-compare-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-compare-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
-                html.Span([
-                    " ",
-                    html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                ],
-                    id={'type': 'info-icon', 'metric': 'Comparison File'}, # type: ignore
-                    style={'cursor': 'pointer', 'marginLeft': '10px'},
-                    title='Click for more info'
-                )
+                html.Span([ " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}), ], id={'type': 'info-icon', 'metric': 'Comparison File'}, style={'cursor': 'pointer', 'marginLeft': '10px'}, title='Click for more info', n_clicks=0), # type: ignore
             ], style={'display': 'flex', 'alignItems': 'center'}, id='compare-upload-container'),
             html.Div(id='compare-metadata-display', className="mt-3")
         ]),
     ]),
-    dbc.Row([
-        dbc.Col([
-            html.Label("Start Block Height:"),
-            dcc.Dropdown(id='start-block-dropdown', clearable=False, placeholder="Upload data to select blocks")
-        ], width=3),
-        dbc.Col([
-            html.Label("End Block Height:"),
-            dcc.Dropdown(id='end-block-dropdown', clearable=False, placeholder="Upload data to select blocks")
-        ], width=3),
-        dbc.Col([
-            html.Div([
-                dbc.Button("Reset View", id="reset-view-button", color="secondary", className="w-100"),
-                html.Span([
-                    " ",
-                    html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                ], # type: ignore
-                    id={'type': 'info-icon', 'metric': 'Reset View'},
-                    style={'cursor': 'pointer', 'marginLeft': '10px'},
-                    title='Click for more info'
-                )
-            ], style={'display': 'flex', 'alignItems': 'center'})
-        ], width="auto", className="d-flex align-items-end"),
-        dbc.Col(html.Div([
-            dbc.Button("Clear CSV", id="clear-csv-button", color="warning", className="w-100"),
+    html.Div([
+        dcc.Graph(id="progress-graph", className="my-4"),
+        html.Div([
+            html.Label("Moving Average Window:", style={'marginRight': '5px'}),
             html.Span([
                 " ",
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-            ], # type: ignore
-                id={'type': 'info-icon', 'metric': 'Clear CSV'},
-                style={'cursor': 'pointer', 'marginLeft': '10px'},
-                title='Click for more info'
+            ],
+            id={'type': 'info-icon', 'metric': 'Moving Average Window'},
+            style={'cursor': 'pointer', 'marginRight': '10px'},
+            title='Click for more info',
+            n_clicks=0
+            ), # type: ignore
+            html.Div(
+                dcc.Slider(
+                    id="ma-window-slider-progress",
+                    min=0,
+                    max=len(ma_windows) - 1,
+                    value=1, # Default to 100
+                    marks=ma_marks,
+                    step=None,
+                ), style={'width': '200px'}
             )
-        ], style={'display': 'flex', 'alignItems': 'center'}), width="auto", className="d-flex align-items-end", id="clear-csv-col", style={'display': 'none' if df_progress.empty else 'flex'}),
-    ], className="mt-3"),
-    dcc.Graph(id="progress-graph"),
-    html.Div([
-        html.Label("Moving Average Window:", style={'marginRight': '5px'}),
-        html.Span([
-            " ",
-            html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-        ], # type: ignore
-        id={'type': 'info-icon', 'metric': 'Moving Average Window'},
-        style={'cursor': 'pointer', 'marginRight': '10px'},
-        title='Click for more info'
-        ),
-        html.Div(
-            dcc.Slider(
-                id="ma-window-slider-progress",
-                min=0,
-                max=len(ma_windows) - 1,
-                value=1, # Default to 100
-                marks=ma_marks,
-                step=None,
-            ), style={'width': '200px'}
-        )
-    ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}, id="ma-slider-container"),
-    html.Div(id="total-time-display-container"),
-
-    html.Hr(),
-    html.H3("Raw Data View", className="mt-4"),
-    html.Div([dbc.Switch(
-            id='show-data-table-switch',
-            label="Show Raw Data Table",
-            value=True,
-        )], id='show-data-table-switch-container'),
-    html.Div(id='data-table-container'),
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}, id="ma-slider-container"),
+        html.Div(id="total-time-display-container"),
+        html.Hr(),
+        html.H3("Raw Data View", className="mt-4"),
+        html.Div([dbc.Switch(
+                id='show-data-table-switch',
+                label="Show Raw Data Table",
+                value=True,
+            )], id='show-data-table-switch-container'),
+        html.Div(id='data-table-container'),
+    ]),
 
     # Add Modal to layout
     dbc.Modal(
@@ -712,14 +868,19 @@ app.layout = html.Div([
 
 # --- New Callbacks for handling uploads and storing data ---
 @app.callback(
-    Output('original-data-store', 'data', allow_duplicate=True),
+    [Output('original-data-store', 'data', allow_duplicate=True),
+     Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('upload-callback-output', 'figure', allow_duplicate=True),
+     Output('loading-state-store', 'data', allow_duplicate=True)],
     Input('upload-original-progress', 'contents'),
     State('upload-original-progress', 'filename'),
     prevent_initial_call=True
 )
 def store_original_data(contents, filename):
     if not contents:
-        return dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}
+    # Set loading overlay ON
+    loading_data = {'loading': True, 'message': 'Feldolgozás: sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -729,20 +890,38 @@ def store_original_data(contents, filename):
         metadata = extract_metadata(lines)
         # Pass only the data part of the file to pandas
         df = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=';')
-        return {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        df.columns = df.columns.str.strip() # Sanitize column names
+
+        # Check for essential columns
+        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
+        if not all(col in df.columns for col in required_cols):
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
+
+        store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
+        # Set loading overlay OFF
+        return store_data, feedback, None, {'loading': False, 'message': ''}
     except Exception as e:
         print(f"Error parsing original uploaded file: {e}")
-        return None
+        error_message = f"Failed to load '{filename}'.\n\nError: {e}\n\nPlease ensure it is a valid sync_progress.csv file."
+        feedback = {'title': 'Upload Failed', 'body': error_message}
+        return None, feedback, {}, {'loading': False, 'message': ''}
 
 @app.callback(
-    Output('compare-data-store', 'data', allow_duplicate=True),
+    [Output('compare-data-store', 'data', allow_duplicate=True),
+     Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('upload-callback-output', 'figure', allow_duplicate=True),
+     Output('loading-state-store', 'data', allow_duplicate=True)],
     Input('upload-compare-progress', 'contents'),
     State('upload-compare-progress', 'filename'),
     prevent_initial_call=True
 )
 def store_compare_data(contents, filename):
     if not contents:
-        return dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}
+    # Set loading overlay ON
+    loading_data = {'loading': True, 'message': 'Feldolgozás: összehasonlító sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -752,82 +931,98 @@ def store_compare_data(contents, filename):
         metadata = extract_metadata(lines)
         # Pass only the data part of the file to pandas
         df = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=';')
-        return {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        df.columns = df.columns.str.strip() # Sanitize column names
+
+        # Check for essential columns
+        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
+        if not all(col in df.columns for col in required_cols):
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
+
+        store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
+        # Set loading overlay OFF
+        return store_data, feedback, None, {'loading': False, 'message': ''}
     except Exception as e:
-        print(f"Error parsing comparison uploaded file: {e}")
-        return None
+        print(f"Error parsing original uploaded file: {e}")
+        error_message = f"Failed to load '{filename}'.\n\nError: {e}\n\nPlease ensure it is a valid sync_progress.csv file."
+        feedback = {'title': 'Upload Failed', 'body': error_message}
+        return None, feedback, {}, {'loading': False, 'message': ''}
+# --- Loading overlay control callback ---
+@app.callback(
+    Output('loading-overlay', 'style', allow_duplicate=True),
+    Output('loading-overlay-message', 'children', allow_duplicate=True),
+    Input('loading-state-store', 'data'),
+    prevent_initial_call=True
+)
+def update_loading_overlay(loading_data):
+    if loading_data and loading_data.get('loading'):
+        return {
+            'position': 'fixed', 'top': 0, 'left': 0, 'width': '100%', 'height': '100%',
+            'display': 'flex', 'justifyContent': 'center', 'alignItems': 'center', 'flexDirection': 'column',
+            'zIndex': 10000
+        }, loading_data.get('message', 'Loading...')
+    else:
+        return {
+            'display': 'none', 'justifyContent': 'center', 'alignItems': 'center',
+            'flexDirection': 'column', 'zIndex': 10000,
+        }, ''
 
 # --- New callback for the clear button ---
 @app.callback(
     [Output('original-data-store', 'data', allow_duplicate=True),
      Output('compare-data-store', 'data', allow_duplicate=True),
-     Output('action-feedback-store', 'data', allow_duplicate=True)],
-    Input('clear-csv-button', 'n_clicks'),
+     Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True),
+     Output('clear-callback-output', 'figure')],
+    Input({'type': 'clear-csv-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
     [State('original-data-store', 'data'),
-     State('compare-data-store', 'data')],
+     State('compare-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def clear_csv_data(n_clicks, original_data, compare_data):
-    if not n_clicks:
+def clear_csv_data(n_clicks_list, original_data, compare_data, unsaved_data):
+    ctx = dash.callback_context
+    if not ctx.triggered or not any(n_clicks_list):
         raise dash.exceptions.PreventUpdate
 
-    feedback_messages = []    
-    if original_data and 'data' in original_data:
-        df_orig = pd.read_json(io.StringIO(original_data['data']), orient='split')
-        rows_before = len(df_orig)
-        df_orig_filtered = filter_df_for_clearing(df_orig)
-        rows_after = len(df_orig_filtered)
-        original_data['data'] = df_orig_filtered.to_json(date_format='iso', orient='split')
+    triggered_id = ctx.triggered_id
+    prefix = triggered_id.get('prefix') if isinstance(triggered_id, dict) else None
 
-        filename = original_data.get('filename', 'Original file')
-        # Save to file
-        try:
-            cleared_dir = os.path.join("measurements", "cleared")
-            os.makedirs(cleared_dir, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_filename = os.path.basename(filename)
-            base, _ = os.path.splitext(base_filename)
-            new_filename = f"{base}_{timestamp}_cleared.csv"
-            filepath = os.path.join(cleared_dir, new_filename)
-            df_orig_filtered.to_csv(filepath, sep=';', index=False)
-            feedback_messages.append(
-                f"'{filename}' was filtered from {rows_before:,} to {rows_after:,} rows and saved as '{filepath}'."
-            )
-        except Exception as e:
-            feedback_messages.append(
-                f"Could not save cleared file for '{filename}'. Error: {e}"
-            )
+    feedback_messages = []
+    new_original_data = dash.no_update
+    new_compare_data = dash.no_update
 
-    if compare_data and 'data' in compare_data:
-        df_comp = pd.read_json(io.StringIO(compare_data['data']), orient='split')
-        rows_before = len(df_comp)
-        df_comp_filtered = filter_df_for_clearing(df_comp)
-        rows_after = len(df_comp_filtered)
-        compare_data['data'] = df_comp_filtered.to_json(date_format='iso', orient='split')
-        
-        filename = compare_data.get('filename', 'Comparison file')
-        # Save to file
-        try:
-            cleared_dir = os.path.join("measurements", "cleared")
-            os.makedirs(cleared_dir, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_filename = os.path.basename(filename)
-            base, _ = os.path.splitext(base_filename)
-            new_filename = f"{base}_{timestamp}_cleared.csv"
-            filepath = os.path.join(cleared_dir, new_filename)
-            df_comp_filtered.to_csv(filepath, sep=';', index=False)
-            feedback_messages.append(
-                f"'{filename}' was filtered from {rows_before:,} to {rows_after:,} rows and saved as '{filepath}'."
-            )
-        except Exception as e:
-            feedback_messages.append(
-                f"Could not save cleared file for '{filename}'. Error: {e}"
-            )
+    if prefix == 'Original':
+        if original_data and 'data' in original_data:
+            df_orig = pd.read_json(io.StringIO(original_data['data']), orient='split')
+            rows_before = len(df_orig)
+            df_orig_filtered = filter_df_for_clearing(df_orig)
+            rows_after = len(df_orig_filtered)
+            original_data['data'] = df_orig_filtered.to_json(date_format='iso', orient='split')
+            unsaved_data['Original'] = True
+            new_original_data = original_data
+            feedback_messages.append(f"'{original_data.get('filename', 'Original file')}' filtered in memory from {rows_before:,} to {rows_after:,} rows.")
+    elif prefix == 'Comparison':
+        if compare_data and 'data' in compare_data:
+            df_comp = pd.read_json(io.StringIO(compare_data['data']), orient='split')
+            rows_before = len(df_comp)
+            df_comp_filtered = filter_df_for_clearing(df_comp)
+            rows_after = len(df_comp_filtered)
+            compare_data['data'] = df_comp_filtered.to_json(date_format='iso', orient='split')
+            unsaved_data['Comparison'] = True
+            new_compare_data = compare_data
+            feedback_messages.append(f"'{compare_data.get('filename', 'Comparison file')}' filtered in memory from {rows_before:,} to {rows_after:,} rows.")
 
-    feedback_body = feedback_messages if feedback_messages else "No data was loaded to clear."
-    feedback_data = {'title': 'CSV Data Cleared', 'body': feedback_body}
+    if not feedback_messages:
+        feedback_body = "No data was loaded to clear."
+    else:
+        feedback_messages.append("\nClick 'Save' or 'Save As...' to persist these changes to a file.")
+        feedback_body = "\n".join(feedback_messages)
 
-    return original_data, compare_data, feedback_data
+    feedback_data = {'title': 'CSV Data Filtered', 'body': feedback_body}
+
+    return new_original_data, new_compare_data, feedback_data, unsaved_data, {}
 
 @app.callback(
     Output('upload-original-progress', 'children'),
@@ -836,7 +1031,7 @@ def clear_csv_data(n_clicks, original_data, compare_data):
 def update_original_upload_text(data):
     """Updates the text of the original upload component based on whether data is loaded."""
     if data and data.get('filename'):
-        return html.Div(f"Selected Original file: {data['filename']}")
+        return html.Div(f"Selected Original file: {data['filename']}", style={'wordBreak': 'break-all'})
     return html.Div(['Drag and Drop or ', html.A('Select Original sync_progress.csv')])
 
 @app.callback(
@@ -846,11 +1041,11 @@ def update_original_upload_text(data):
 def update_compare_upload_text(data):
     """Updates the text of the comparison upload component based on whether data is loaded."""
     if data and data.get('filename'):
-        return html.Div(f"Selected Comparison file: {data['filename']}")
+        return html.Div(f"Selected Comparison file: {data['filename']}", style={'wordBreak': 'break-all'})
     return html.Div(['Drag and Drop or ', html.A('Select Comparison sync_progress.csv')])
 
 @app.callback(
-    [Output('original-data-store', 'data', allow_duplicate=True),
+    [Output('original-data-store', 'data'),
      Output('upload-original-progress', 'contents', allow_duplicate=True)],
     Input('discard-original-button', 'n_clicks'),
     prevent_initial_call=True
@@ -876,46 +1071,135 @@ def discard_compare_data(n_clicks):
     return None, None
 
 @app.callback(
-    [Output('discard-original-button', 'style'),
-     Output('discard-compare-button', 'style')],
-    [Input('original-data-store', 'data'),
-     Input('compare-data-store', 'data')]
+    Output('discard-original-button', 'style'),
+    Input('original-data-store', 'data')
 )
-def toggle_discard_buttons(original_data, compare_data):
-    """Shows or hides the discard buttons based on whether data is loaded."""
-    original_style = {'display': 'block'} if original_data else {'display': 'none'}
-    compare_style = {'display': 'block'} if compare_data else {'display': 'none'}
-    return original_style, compare_style
+def toggle_discard_original_button(data):
+    """Shows or hides the discard button for the original file."""
+    if data:
+        return {'display': 'inline-block'}
+    return {'display': 'none'}
+
+@app.callback(
+    Output('discard-compare-button', 'style'),
+    Input('compare-data-store', 'data')
+)
+def toggle_discard_compare_button(data):
+    """Shows or hides the discard button for the comparison file."""
+    if data:
+        return {'display': 'inline-block'}
+    return {'display': 'none'}
+
+@app.callback(
+    Output('reload-original-button', 'style'),
+    Input('original-data-store', 'data')
+)
+def toggle_reload_original_button(data):
+    """Shows or hides the reload button for the original file."""
+    if data and data.get('filename'):
+        return {'display': 'inline-block'}
+    return {'display': 'none'}
+
+@app.callback(
+    Output('reload-compare-button', 'style'),
+    Input('compare-data-store', 'data')
+)
+def toggle_reload_compare_button(data):
+    """Shows or hides the reload button for the comparison file."""
+    if data and data.get('filename'):
+        return {'display': 'inline-block'}
+    return {'display': 'none'}
+
+@app.callback(
+    [Output('original-data-store', 'data', allow_duplicate=True),
+     Output('action-feedback-store', 'data', allow_duplicate=True)],
+    Input('reload-original-button', 'n_clicks'),
+    State('original-data-store', 'data'),
+    prevent_initial_call=True
+)
+def reload_original_data(n_clicks, store_data):
+    if not n_clicks or not store_data or not store_data.get('filename'):
+        raise dash.exceptions.PreventUpdate
+    
+    filepath_in_store = store_data['filename']
+    
+    if not os.path.isabs(filepath_in_store):
+        filepath = os.path.join(SCRIPT_DIR, "measurements", filepath_in_store)
+    else:
+        filepath = filepath_in_store
+
+    if not os.path.exists(filepath):
+        feedback = {'title': 'Reload Failed', 'body': f"File not found at expected path: {filepath}"}
+        return dash.no_update, feedback
+
+    new_store_data, feedback = load_csv_from_path(filepath)
+    
+    if new_store_data:
+        new_store_data['filename'] = filepath
+        return new_store_data, feedback
+    else:
+        return dash.no_update, feedback
+
+@app.callback(
+    [Output('compare-data-store', 'data', allow_duplicate=True),
+     Output('action-feedback-store', 'data', allow_duplicate=True)],
+    Input('reload-compare-button', 'n_clicks'),
+    State('compare-data-store', 'data'),
+    prevent_initial_call=True
+)
+def reload_compare_data(n_clicks, store_data):
+    if not n_clicks or not store_data or not store_data.get('filename'):
+        raise dash.exceptions.PreventUpdate
+    
+    filepath_in_store = store_data['filename']
+    
+    if not os.path.isabs(filepath_in_store):
+        filepath = os.path.join(SCRIPT_DIR, "measurements", filepath_in_store)
+    else:
+        filepath = filepath_in_store
+
+    if not os.path.exists(filepath):
+        feedback = {'title': 'Reload Failed', 'body': f"File not found at expected path: {filepath}"}
+        return dash.no_update, feedback
+
+    new_store_data, feedback = load_csv_from_path(filepath)
+    
+    if new_store_data:
+        new_store_data['filename'] = filepath
+        return new_store_data, feedback
+    else:
+        return dash.no_update, feedback
 
 # --- Callback to Update Progress Graph ---
 @app.callback(
     [Output("progress-graph", "figure"),
      Output("total-time-display-container", "children"),
-     Output("start-block-dropdown", "options"),
-     Output("start-block-dropdown", "value"),
-     Output("end-block-dropdown", "options"),
-     Output("end-block-dropdown", "value"),
+     Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
+     Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
+     Output({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
+     Output({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
+     Output("main-callback-output", "figure"),
      Output("data-table-container", "children"),
      Output("data-table-container", "style"),
     ],
     [Input("ma-window-slider-progress", "value"),
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
-     Input('start-block-dropdown', 'value'),
-     Input('end-block-dropdown', 'value'),
-     Input('reset-view-button', 'n_clicks'),
+     Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
+     Input({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
+     Input({'type': 'reset-view-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input('show-data-table-switch', 'value'),
      Input('theme-store', 'data')],
 )
 def update_progress_graph_and_time(window_index, original_data, compare_data,
-                                   start_block_val, end_block_val, reset_clicks,
+                                   start_block_vals, end_block_vals, reset_clicks,
                                    show_data_table, theme):
     window = ma_windows[window_index]
     ctx = dash.callback_context
 
     # --- Define colors based on theme ---
     is_dark_theme = theme != 'light'
-    original_bps_color = '#b86e1e' if is_dark_theme else 'darkorange'  # Muted orange for dark theme
+    original_bps_color = '#b86e1e' if is_dark_theme else '#FF8C00'  # Muted orange for dark theme (was 'darkorange')
     original_ma_color = '#e0943b' if is_dark_theme else 'orange'      # Muted Amber for dark theme
     hover_label_style = dict(bgcolor="rgba(255, 255, 255, 0.8)", font=dict(color='black'))
     
@@ -923,6 +1207,17 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
     if is_dark_theme:
         hover_label_style = dict(bgcolor="rgba(34, 37, 41, 0.9)", font=dict(color='white'))
         background_style = {'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)'}
+
+    # --- Map inputs to prefixes ---
+    # The order of inputs is: ma-slider, original-data, compare-data, start-block-vals, end-block-vals, ...
+    start_block_inputs = {}
+    if ctx.inputs_list[3]:
+        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[3]}
+
+    end_block_inputs = {}
+    if ctx.inputs_list[4]:
+        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]}
+
  
     def create_header_with_tooltip(text, metric_id, style=None):
         if metric_id in tooltip_texts:
@@ -966,52 +1261,71 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
             **background_style
         )
         summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
-        return empty_fig, summary_table, [], None, [], None, [], {'display': 'none'}
+        
+        # Correctly form empty outputs for pattern-matching callbacks
+        num_start_dds = len(ctx.outputs_list[2])
+        num_end_dds = len(ctx.outputs_list[4])
+        
+        empty_start_opts = [[] for _ in range(num_start_dds)]
+        empty_start_vals = [None for _ in range(num_start_dds)]
+        empty_end_opts = [[] for _ in range(num_end_dds)]
+        empty_end_vals = [None for _ in range(num_end_dds)]
 
+        return empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
     if not df_compare.empty:
         df_compare = process_progress_df(df_compare, compare_filename)
 
-    # --- Determine block range ---
-    block_height_series = []
-    if not df_progress_local.empty and 'Block_height' in df_progress_local.columns:
-        block_height_series.append(df_progress_local['Block_height'])
-    if not df_compare.empty and 'Block_height' in df_compare.columns:
-        block_height_series.append(df_compare['Block_height'])
+    # --- Prepare data for each card ---
+    data_map = {
+        'Original': {'df': df_progress_local, 'filename': original_filename, 'start_block': None, 'end_block': None, 'options': [], 'display_df': pd.DataFrame()},
+        'Comparison': {'df': df_compare, 'filename': compare_filename, 'start_block': None, 'end_block': None, 'options': [], 'display_df': pd.DataFrame()}
+    }
 
-    if not block_height_series:
-        graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
-        empty_fig = go.Figure()
-        empty_fig.update_layout(
-            title_text='No valid data with "Block_height" column found. Please check the uploaded files.',
-            template=graph_template,
-            **background_style
-        )
-        summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
-        return empty_fig, summary_table, [], None, [], None, [], {'display': 'none'}
+    triggered_id = ctx.triggered_id
+    is_upload_or_clear = triggered_id in ['original-data-store', 'compare-data-store']
+    is_reset = isinstance(triggered_id, dict) and triggered_id.get('type') == 'reset-view-button'
 
-    all_block_heights = pd.concat(block_height_series).dropna().unique()
-    all_block_heights.sort()
+    # --- Calculate ranges and options for each file ---
+    for prefix, info in data_map.items():
+        df = info['df']
+        if not df.empty:
+            min_block = df['Block_height'].min()
+            max_block = df['Block_height'].max()
+            # Use unique and sorted values for dropdowns
+            unique_heights = sorted(df['Block_height'].unique())
+            info['options'] = [{'label': f"{int(h):,}", 'value': h} for h in unique_heights]
+            
+            current_start = start_block_inputs.get(prefix)
+            current_end = end_block_inputs.get(prefix)
 
-    dropdown_options = [{'label': f"{int(h):,}", 'value': h} for h in all_block_heights]
-    min_block = all_block_heights[0]
-    max_block = all_block_heights[-1]
+            # Determine start and end blocks based on context
+            if is_reset and triggered_id.get('prefix') == prefix:
+                info['start_block'] = min_block
+                info['end_block'] = max_block
+            elif is_upload_or_clear or current_start is None or current_end is None:
+                info['start_block'] = min_block
+                info['end_block'] = max_block
+            else:
+                info['start_block'] = current_start
+                info['end_block'] = current_end
 
-    triggered_id_str = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else ''
-    is_upload_or_clear = triggered_id_str in ['original-data-store', 'compare-data-store']
-    is_reset = triggered_id_str == 'reset-view-button'
-
-    start_block = min_block if is_upload_or_clear or is_reset or start_block_val is None else start_block_val
-    end_block = max_block if is_upload_or_clear or is_reset or end_block_val is None else end_block_val
-
-    if start_block > end_block:
-        start_block, end_block = end_block, start_block
+            # Swap if start > end
+            if info['start_block'] is not None and info['end_block'] is not None and info['start_block'] > info['end_block']:
+                info['start_block'], info['end_block'] = info['end_block'], info['start_block']
+            
+            # Filter data for display
+            start, end = info['start_block'], info['end_block']
+            if start is not None and end is not None:
+                info['display_df'] = df[(df['Block_height'] >= start) & (df['Block_height'] <= end)].copy()
+            else:
+                info['display_df'] = df.copy()
 
     # --- Filter dataframes for display and metrics ---
-    df_original_display = df_progress_local[(df_progress_local['Block_height'] >= start_block) & (df_progress_local['Block_height'] <= end_block)].copy() if not df_progress_local.empty else pd.DataFrame()
-    df_compare_display = df_compare[(df_compare['Block_height'] >= start_block) & (df_compare['Block_height'] <= end_block)].copy() if not df_compare.empty else pd.DataFrame()
+    df_original_display = data_map['Original']['display_df']
+    df_compare_display = data_map['Comparison']['display_df']
 
     # --- Plot Original Data ---
     if not df_original_display.empty:
@@ -1109,11 +1423,46 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     itemdoubleclick='toggleothers'),
         template=graph_template,
         margin=dict(l=80, r=0, t=80, b=80),
+        yaxis2=dict(
+            side='right',
+            overlaying='y',
+            anchor='x',
+            # Add some padding to the right of the secondary y-axis labels
+            # to prevent them from being too close to the edge.
+            title=dict(standoff=15),
+            automargin=True,
+        ),
         **background_style
     )
-    fig.update_yaxes(title_text="<b>Block Height</b>", secondary_y=False)
-    fig.update_yaxes(title_text="<b>Sync Speed (Blocks/sec)</b>", secondary_y=True)
+    # --- Update Y-Axes with specific colors for clarity ---
+    # Primary Y-axis (Block Height) - uses default color (blue/cyan)
+    fig.update_yaxes(
+        title_text="<b>Block Height</b>",
+        secondary_y=False,
+        color="#1f77b4", # Sets tick and title font color
+        linecolor="#1f77b4", # Sets axis line color
+        gridcolor='rgba(28, 119, 180, 0.3)', # Color for the grid lines with some transparency
+        gridwidth=1,
+        showgrid=True
+    )
+    # Secondary Y-axis (Sync Speed) - uses orange color to match its traces
+    fig.update_yaxes(
+        title_text="<b>Sync Speed (Blocks/sec)</b>",
+        secondary_y=True,
+        color=original_bps_color, # Sets tick and title font color
+        linecolor=original_bps_color, # Sets axis line color
+        gridcolor=f'rgba({int(original_bps_color[1:3], 16)}, {int(original_bps_color[3:5], 16)}, {int(original_bps_color[5:7], 16)}, 0.3)', # Color for the grid lines with some transparency
+        gridwidth=1,
+        showgrid=True # Ensure grid is visible for the secondary axis
+    )
     fig.update_xaxes(title_text="Sync in Progress Time [s]")
+
+    # --- Prepare outputs for dropdowns ---
+    # The order of outputs is determined by Dash. We can get it from ctx.outputs_list.
+    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[2]]
+    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_list[3]]
+    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[4]]
+    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_list[5]]
 
     # --- Update total time display and metrics tables ---
     table_title_original = f"Original: {original_filename}"
@@ -1335,14 +1684,16 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
         else:
             table_children = [html.P("No data to display in table.")]
 
-    return fig, summary_table, dropdown_options, start_block, dropdown_options, end_block, table_children, table_style
+    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
 
 @app.callback(
     Output('action-feedback-store', 'data', allow_duplicate=True),
-    Input('reset-view-button', 'n_clicks'),
+    Input({'type': 'reset-view-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
     prevent_initial_call=True
 )
-def handle_reset_feedback(n_clicks):
+def handle_reset_feedback(n_clicks_list):
+    if not any(n_clicks_list):
+        raise dash.exceptions.PreventUpdate
     return {
         'title': 'View Reset',
         'body': 'The block range filter has been reset to show all available data.'
@@ -1374,17 +1725,20 @@ def show_tooltip_modal(n_clicks):
     # This prevents the modal from appearing when its inputs are re-rendered by another callback (e.g., by the slider).
     if not ctx.triggered or not ctx.triggered[0]['value']:
         raise dash.exceptions.PreventUpdate
-
-    triggered_id = ctx.triggered_id
+    triggered_id_dict = ctx.triggered_id
     # A final safety check in case the triggered_id is None
-    if not triggered_id:
+    if not triggered_id_dict:
         raise dash.exceptions.PreventUpdate
-    metric_name = triggered_id['metric']
-    
+    metric_id = triggered_id_dict['metric']
+    # Handle prefixed metric IDs from metadata cards (e.g., "Original-Hostname")
+    # and non-prefixed IDs from other parts of the app.
+    if '-' in metric_id and any(metric_id.startswith(p) for p in ['Original-', 'Comparison-']):
+        metric_name = metric_id.split('-', 1)[1]
+    else:
+        metric_name = metric_id
     info = tooltip_texts.get(metric_name, {})
     title = info.get('title', 'Information')
     body_text = info.get('body', 'No details available for this metric.')
-    
     # Split body into paragraphs for better formatting
     body_components = [html.P(p) for p in body_text.split('\n\n')]
 
@@ -1412,10 +1766,14 @@ def show_action_feedback_modal(feedback_data, n_clicks, is_open):
     if triggered_id == "action-feedback-store" and feedback_data:
         title = feedback_data.get('title', 'Notification')
         body = feedback_data.get('body', 'An action was completed.')
+
+        # Style to ensure long paths wrap correctly inside the modal
+        p_style = {'overflowWrap': 'break-word', 'wordWrap': 'break-word'}
+
         if isinstance(body, list):
-            body_components = [html.P(p) for p in body]
+            body_components = [html.P(p, style=p_style) for p in body]
         else:
-            body_components = [html.P(body)]
+            body_components = [html.P(body, style=p_style)]
         
         button_style = {'display': 'inline-block'} if title == 'Reports Saved' else {'display': 'none'}
         return True, title, body_components, button_style
@@ -1424,9 +1782,305 @@ def show_action_feedback_modal(feedback_data, n_clicks, is_open):
     return is_open, dash.no_update, dash.no_update, dash.no_update
 
 @app.callback(
+    Output({'type': 'unsaved-changes-badge', 'prefix': dash.dependencies.ALL}, 'style', allow_duplicate=True),
+    Input('unsaved-changes-store', 'data'),
+    [State({'type': 'unsaved-changes-badge', 'prefix': dash.dependencies.ALL}, 'id')],
+    prevent_initial_call=True
+)
+def update_unsaved_changes_badge(unsaved_data, ids):
+    if not unsaved_data:
+        return [dash.no_update] * len(ids)
+    
+    styles = []
+    for component_id in ids:
+        prefix = component_id['prefix']
+        if unsaved_data.get(prefix, False):
+            styles.append({'display': 'inline-block', 'verticalAlign': 'middle'})
+        else:
+            styles.append({'display': 'none', 'verticalAlign': 'middle'})
+    return styles
+
+@app.callback(
+    [Output('original-data-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
+    Input({'type': 'add-metadata-button', 'prefix': 'Original'}, 'n_clicks'),
+    [
+        State({'type': 'metadata-key-input', 'prefix': 'Original'}, 'value'),
+        State({'type': 'metadata-value-input', 'prefix': 'Original'}, 'value'),
+        State('original-data-store', 'data'),
+        State('unsaved-changes-store', 'data')
+    ],
+    prevent_initial_call=True
+)
+def add_original_metadata(n_clicks, key, value, store_data, unsaved_data):
+    if not n_clicks or not key or value is None:
+        raise dash.exceptions.PreventUpdate
+
+    if store_data and 'metadata' in store_data:
+        store_data['metadata'][key.strip()] = value.strip()
+        unsaved_data['Original'] = True
+        return store_data, unsaved_data
+    
+    raise dash.exceptions.PreventUpdate
+
+@app.callback(
+    [Output('original-data-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
+    Input({'type': 'metadata-input', 'prefix': 'Original', 'key': dash.dependencies.ALL}, 'value'),
+    [State('original-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
+    prevent_initial_call=True
+)
+def update_original_metadata(values, store_data, unsaved_data):
+    ctx = dash.callback_context
+    if not ctx.triggered_id:
+        raise dash.exceptions.PreventUpdate
+    
+    key = ctx.triggered_id['key']
+    value = ctx.triggered[0]['value']
+
+    if store_data and 'metadata' in store_data and store_data['metadata'].get(key) != value:
+        store_data['metadata'][key] = value
+        unsaved_data['Original'] = True
+        return store_data, unsaved_data
+    
+    raise dash.exceptions.PreventUpdate
+
+@app.callback(
+    [Output('compare-data-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
+    Input({'type': 'metadata-input', 'prefix': 'Comparison', 'key': dash.dependencies.ALL}, 'value'),
+    [State('compare-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
+    prevent_initial_call=True
+)
+def update_compare_metadata(values, store_data, unsaved_data):
+    ctx = dash.callback_context
+    if not ctx.triggered_id:
+        raise dash.exceptions.PreventUpdate
+    
+    key = ctx.triggered_id['key']
+    value = ctx.triggered[0]['value']
+
+    if store_data and 'metadata' in store_data and store_data['metadata'].get(key) != value:
+        store_data['metadata'][key] = value
+        unsaved_data['Comparison'] = True
+        return store_data, unsaved_data
+    
+    raise dash.exceptions.PreventUpdate
+
+@app.callback(
+    [Output('compare-data-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
+    Input({'type': 'add-metadata-button', 'prefix': 'Comparison'}, 'n_clicks'),
+    [
+        State({'type': 'metadata-key-input', 'prefix': 'Comparison'}, 'value'),
+        State({'type': 'metadata-value-input', 'prefix': 'Comparison'}, 'value'),
+        State('compare-data-store', 'data'),
+        State('unsaved-changes-store', 'data')
+    ],
+    prevent_initial_call=True
+)
+def add_compare_metadata(n_clicks, key, value, store_data, unsaved_data):
+    if not n_clicks or not key or value is None:
+        raise dash.exceptions.PreventUpdate
+
+    if store_data and 'metadata' in store_data:
+        store_data['metadata'][key.strip()] = value.strip()
+        unsaved_data['Comparison'] = True
+        return store_data, unsaved_data
+    
+    raise dash.exceptions.PreventUpdate
+
+def write_csv_new(store_data, filter_range, start_block, end_block):
+    if not store_data:
+        return "No data in store to save."
+
+    filename = store_data.get('filename', 'unknown_file.csv')
+    metadata = store_data.get('metadata', {})
+    df_json = store_data.get('data')
+
+    if not df_json:
+        return f"No data content found for '{filename}'."
+
+    df = pd.read_json(io.StringIO(df_json), orient='split')
+
+    # Apply filters based on options
+    suffix = ""
+    if filter_range and start_block is not None and end_block is not None:
+        df = df[(df['Block_height'] >= start_block) & (df['Block_height'] <= end_block)]
+        suffix += f"_range_{int(start_block)}-{int(end_block)}"
+
+    # Create the new file content as a string
+    output = io.StringIO()
+    
+    # Write metadata
+    if metadata:
+        output.write("Property;Value\n")
+        for key, value in metadata.items():
+            output.write(f"{key};{value}\n")
+        output.write(";;\n") # Separator
+
+    # Write dataframe
+    df.to_csv(output, sep=';', index=False)
+    
+    # Save to a new file
+    try:
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
+        os.makedirs(saved_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_filename = os.path.basename(filename)
+        base, ext = os.path.splitext(base_filename)
+
+        # Add hostname to the filename if available
+        hostname_part = ""
+        hostname = metadata.get('Hostname')
+        if hostname:
+            # Sanitize hostname for use in a filename
+            sanitized_hostname = re.sub(r'[^\w\.\-]', '_', hostname)
+            hostname_part = f"_hostname_{sanitized_hostname}"
+
+        # Sequentially remove known suffixes from the end to get the clean base name
+        base = re.sub(r'_\d+$', '', base)  # sequence number (_1)
+        base = re.sub(r'_\d{8}_\d{6}$', '', base)  # timestamp
+        base = re.sub(r'_hostname_[\w\.\-]+$', '', base) # hostname
+        base = re.sub(r'_range_\d+-\d+$', '', base) # range suffix
+
+        # Construct the new filename
+        new_base_filename = f"{base}{suffix}{hostname_part}_{timestamp}"
+        
+        # Find a unique filename by appending a counter if necessary
+        filepath = os.path.join(saved_dir, f"{new_base_filename}.csv")
+        counter = 1
+        while os.path.exists(filepath):
+            filepath = os.path.join(saved_dir, f"{new_base_filename}_{counter}.csv")
+            counter += 1
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(output.getvalue())
+        
+        return f"File with updated data saved to: {filepath}"
+    except Exception as e:
+        return f"Error saving file: {e}"
+
+def write_csv_overwrite(store_data, filter_range, start_block, end_block):
+    if not store_data:
+        return "No data in store to save."
+
+    filename = store_data.get('filename', 'unknown_file.csv')
+    metadata = store_data.get('metadata', {})
+    df_json = store_data.get('data')
+
+    if not df_json:
+        return f"No data content found for '{filename}'."
+
+    df = pd.read_json(io.StringIO(df_json), orient='split')
+
+    suffix = ""
+    if filter_range and start_block is not None and end_block is not None:
+        df = df[(df['Block_height'] >= start_block) & (df['Block_height'] <= end_block)]
+        suffix += f"_range_{int(start_block)}-{int(end_block)}"
+
+    output = io.StringIO()
+    if metadata:
+        output.write("Property;Value\n")
+        for key, value in metadata.items():
+            output.write(f"{key};{value}\n")
+        output.write(";;\n")
+
+    df.to_csv(output, sep=';', index=False)
+
+    try:
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
+        os.makedirs(saved_dir, exist_ok=True)
+        base_filename = os.path.basename(filename)
+        base, ext = os.path.splitext(base_filename)
+
+        # Clean up old suffixes
+        base = re.sub(r'_\d+$', '', base)
+        base = re.sub(r'_\d{8}_\d{6}$', '', base)
+        base = re.sub(r'_hostname_[\w\.\-]+$', '', base)
+        base = re.sub(r'_range_\d+-\d+$', '', base)
+
+        hostname_part = ""
+        hostname = metadata.get('Hostname')
+        if hostname:
+            sanitized_hostname = re.sub(r'[^\w\.\-]', '_', hostname)
+            hostname_part = f"_hostname_{sanitized_hostname}"
+
+        new_filename = f"{base}{suffix}{hostname_part}.csv"
+        filepath = os.path.join(saved_dir, new_filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(output.getvalue())
+        
+        return f"File saved to: {filepath}"
+    except Exception as e:
+        return f"Error saving file: {e}"
+
+@app.callback(
+    [Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True),
+     Output('save-callback-output', 'figure', allow_duplicate=True)],
+    [Input({'type': 'save-as-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
+     Input({'type': 'save-overwrite-button', 'prefix': dash.dependencies.ALL}, 'n_clicks')],
+    [State('original-data-store', 'data'),
+     State('compare-data-store', 'data'),
+     State({'type': 'save-filter-range-check', 'prefix': dash.dependencies.ALL}, 'value'),
+     State({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
+     State({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
+     State('unsaved-changes-store', 'data')],
+    prevent_initial_call=True
+)
+def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filter_range_values, start_block_vals, end_block_vals, unsaved_data):
+    triggered_id = dash.callback_context.triggered_id
+    if not triggered_id or not (any(n_clicks_as) or any(n_clicks_overwrite)):
+        raise dash.exceptions.PreventUpdate
+
+    prefix = triggered_id['prefix']
+    save_as = triggered_id['type'] == 'save-as-button'
+
+    filter_range = False
+    for i, comp_id in enumerate(dash.callback_context.states_list[2]): # type: ignore
+        if comp_id['id']['prefix'] == prefix:
+            filter_range = bool(filter_range_values[i])
+            break
+
+    start_block = None
+    end_block = None
+
+    # Find the correct start and end block values from the lists based on the triggered prefix
+    start_block_states = dash.callback_context.states_list[3]
+    for i, state in enumerate(start_block_states):
+        if state['id']['prefix'] == prefix:
+            start_block = start_block_vals[i]
+            break
+
+    end_block_states = dash.callback_context.states_list[4]
+    for i, state in enumerate(end_block_states):
+        if state['id']['prefix'] == prefix:
+            end_block = end_block_vals[i]
+            break
+
+    message = "An unknown error occurred."
+    data_to_save = original_data if prefix == 'Original' else compare_data
+
+    if data_to_save:
+        if save_as:
+            message = write_csv_new(data_to_save, filter_range, start_block, end_block)
+        else:
+            message = write_csv_overwrite(data_to_save, filter_range, start_block, end_block)
+        
+        if 'Error' not in message:
+            unsaved_data[prefix] = False
+
+    return {'title': 'Save to CSV', 'body': message}, unsaved_data, {}
+
+@app.callback(
     Output('theme-switch', 'value'),
-    Output('theme-stylesheet', 'href'),
+    Output('theme-stylesheet', 'href', allow_duplicate=True),
     Input('theme-store', 'data'),
+    prevent_initial_call='initial_duplicate'
 )
 def load_initial_theme(stored_theme):
     # Default to dark theme if nothing is stored
@@ -1445,37 +2099,36 @@ def switch_theme(is_dark):
         return 'dark', dbc.themes.DARKLY
     return 'light', dbc.themes.BOOTSTRAP
 
-@app.callback(
+@app.callback( # type: ignore
     [Output('original-metadata-display', 'children'),
-     Output('compare-metadata-display', 'children')],
+     Output('original-metadata-display', 'style'),
+     Output('compare-metadata-display', 'children'),
+     Output('compare-metadata-display', 'style')],
     [Input('original-data-store', 'data'),
-     Input('compare-data-store', 'data')]
-)
+     Input('compare-data-store', 'data')])
 def update_metadata_display(original_data, compare_data):
-    def create_metadata_card(data, title_prefix):
-        if not data or 'metadata' not in data or not data['metadata']:
+    def create_system_info_card(data, title_prefix):
+        if not data:
             return None
-
-        metadata = data['metadata']
+        metadata = data.get('metadata', {})
         filename = data.get('filename', 'data file')
 
-        card_header = dbc.CardHeader(f"{title_prefix} System Info: {filename}", className="fw-bold")
+        card_header = dbc.CardHeader(
+            dbc.Row([
+                dbc.Col(f"{title_prefix} System Info: {os.path.basename(filename)}", className="fw-bold"),
+                dbc.Col([
+                    dbc.Badge("Unsaved", color="warning", className="me-2", id={'type': 'unsaved-changes-badge', 'prefix': title_prefix}, style={'display': 'none', 'verticalAlign': 'middle'}),
+                ], width="auto", className="d-flex align-items-center")
+            ], align="center", justify="between")
+        )
 
         # Define preferred order for display to ensure consistency
         preferred_order = [
-            'Signum Version',
-            'Hostname',
-            'OS Name',
-            'OS Version',
-            'OS Architecture',
-            'Java Version',
-            'Available Processors',
-            'Max Memory (MB)',
-            'Total RAM (MB)',
-            'Database Type',
-            'Database Version'
+            'Signum Version', 'Hostname', 'OS Name', 'OS Version', 'OS Architecture',
+            'Java Version', 'Available Processors', 'Max Memory (MB)', 'Total RAM (MB)',
+            'Database Type', 'Database Version'
         ]
-        
+
         list_group_items = []
 
         def create_list_item(key, value):
@@ -1486,22 +2139,30 @@ def update_metadata_display(original_data, compare_data):
                 info_icon = html.Span([
                     " ",
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info')
+                ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 key_with_icon.append(info_icon)
-            
+
             return dbc.ListGroupItem(
                 [
                     html.Div(key_with_icon, style={'display': 'flex', 'alignItems': 'center'}),
-                    html.Span(value, className="text-end text-muted")
+                    dbc.Input(
+                        id={'type': 'metadata-input', 'prefix': title_prefix, 'key': key},
+                        value=str(value),
+                        type='text',
+                        className="text-end text-muted",
+                        size="sm",
+                        style={'border': 'none', 'backgroundColor': 'transparent', 'boxShadow': 'none', 'padding': '0', 'margin': '0', 'height': 'auto'},
+                        debounce=True
+                    )
                 ],
-                className="d-flex justify-content-between p-2"
+                className="d-flex justify-content-between align-items-center p-2"
             )
-        
+
         # Add preferred keys first, in the specified order
         for key in preferred_order:
             if key in metadata:
                 list_group_items.append(create_list_item(key, metadata[key]))
-        
+
         # Add any other keys that were not in the preferred list
         # This makes the function robust to future additions
         for key, value in metadata.items():
@@ -1511,10 +2172,98 @@ def update_metadata_display(original_data, compare_data):
         card_body = dbc.ListGroup(list_group_items, flush=True)
         return dbc.Card([card_header, card_body])
 
-    original_card = create_metadata_card(original_data, "Original")
-    compare_card = create_metadata_card(compare_data, "Comparison")
+    def create_controls_card(data, title_prefix):
+        list_group_items = []
+        # Add block selectors
+        start_block_selector = dbc.ListGroupItem(
+            [
+                html.Div(html.B("Start Block Height:")),
+                html.Div(dcc.Dropdown(id={'type': 'start-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select start block"), style={'width': '50%'})
+            ],
+            className="d-flex justify-content-between align-items-center p-2"
+        )
+        list_group_items.append(start_block_selector)
 
-    return original_card, compare_card
+        end_block_selector = dbc.ListGroupItem(
+            [
+                html.Div(html.B("End Block Height:")),
+                html.Div(dcc.Dropdown(id={'type': 'end-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select end block"), style={'width': '50%'})
+            ],
+            className="d-flex justify-content-between align-items-center p-2"
+        )
+        list_group_items.append(end_block_selector)
+        # --- New UI elements for adding metadata ---
+        add_metadata_form = dbc.ListGroupItem([
+            dbc.Row([
+                dbc.Col(dbc.Input(id={'type': 'metadata-key-input', 'prefix': title_prefix}, placeholder='New Property', type='text', size='sm'), width=4),
+                dbc.Col(dbc.Input(id={'type': 'metadata-value-input', 'prefix': title_prefix}, placeholder='Value', type='text', size='sm'), width=5),
+                dbc.Col(dbc.Button("Add", id={'type': 'add-metadata-button', 'prefix': title_prefix}, color="primary", size="sm", className="w-100"), width=3)
+            ], align="center", className="g-2") # g-2 for gutter
+        ], className="p-2")
+
+        list_group_items.append(add_metadata_form)
+        controls_bar = dbc.ListGroupItem([
+            dbc.Row([
+                # Left side: View and Clear controls
+                dbc.Col([
+                    dbc.Button("Reset View", id={'type': 'reset-view-button', 'prefix': title_prefix}, color="secondary", size="sm", className="me-2"),
+                    html.Span([
+                        " ",
+                        html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Reset View'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                    html.Div("|", className="text-muted mx-2"),
+                    dbc.Button("Clear CSV", id={'type': 'clear-csv-button', 'prefix': title_prefix}, color="warning", size="sm", className="me-2"),
+                    html.Span([
+                        " ",
+                        html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Clear CSV'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                ], width="auto", className="d-flex align-items-center"),
+                # Right side: Save controls
+                dbc.Col([
+                    dcc.Checklist(
+                        options=[{'label': ' Filter range', 'value': 'filter'}],
+                        value=[],
+                        id={'type': 'save-filter-range-check', 'prefix': title_prefix},
+                        inline=True,
+                        className="me-1 custom-checklist"
+                    ),
+                    html.Span([
+                        " ",
+                        html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save Filtered Range'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                    html.Div("|", className="text-muted mx-2"),
+                    dbc.Button("Save", id={'type': 'save-overwrite-button', 'prefix': title_prefix}, size="sm", color="primary", className="me-1"),
+                    html.Span([
+                        " ",
+                        html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                    html.Div("|", className="text-muted mx-2"),
+                    dbc.Button("Save As...", id={'type': 'save-as-button', 'prefix': title_prefix}, size="sm", color="success", className="me-1"), # type: ignore
+                    html.Span([
+                        " ",
+                        html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save As...'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                ], width="auto", className="d-flex align-items-center justify-content-end")
+            ], align="center", justify="between")
+        ], className="p-2")
+        list_group_items.append(controls_bar)
+
+        card_body = dbc.ListGroup(list_group_items, flush=True)
+        return dbc.Card(card_body, className="mt-3")
+
+    original_display = html.Div([
+        create_system_info_card(original_data, "Original"),
+        create_controls_card(original_data, "Original")
+    ])
+    original_style = {'display': 'block'} if original_data else {'display': 'none'}
+
+    compare_display = html.Div([
+        create_system_info_card(compare_data, "Comparison"),
+        create_controls_card(compare_data, "Comparison")
+    ])
+    compare_style = {'display': 'block'} if compare_data else {'display': 'none'}
+
+    return original_display, original_style, compare_display, compare_style
 
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
@@ -1527,61 +2276,74 @@ app.clientside_callback(
             return [window.dash_clientside.no_update, window.dash_clientside.no_update];
         }
 
-        if (!figure) {
-            const noFigureReturn = [window.dash_clientside.no_update, window.dash_clientside.no_update];
-            return noFigureReturn;
-        }
-
         try {
-            const mainContainer = document.getElementById('main-container');
-            if (!mainContainer) {
-                return ['CLIENTSIDE_ERROR: main-container element not found.', null];
+            const rootElement = document.documentElement;
+            if (!rootElement) {
+                return ['CLIENTSIDE_ERROR: root element (html) not found.', null];
             }
             // Clone the container to avoid modifying the live DOM
-            const clone = mainContainer.cloneNode(true);
+            const clone = rootElement.cloneNode(true);
 
             const isDarkTheme = document.documentElement.getAttribute('data-bs-theme') === 'dark';
 
-            // --- Replace Dropdowns with Static Text ---
-            const dropdownIds = ['start-block-dropdown', 'end-block-dropdown'];
-            dropdownIds.forEach(id => {
-                const originalDropdownValue = document.querySelector(`#${id} .Select-value-label, #${id} .Select__single-value`);
-                const clonedDropdown = clone.querySelector(`#${id}`);
-                if (clonedDropdown && clonedDropdown.parentNode) {
+            // --- Replace interactive elements with static text ---
+
+            // 1. Dropdowns
+            clone.querySelectorAll('div[id*="start-block-dropdown"], div[id*="end-block-dropdown"]').forEach(clonedDropdown => {
+                const originalDropdown = document.getElementById(clonedDropdown.id);
+                const wrapper = clonedDropdown.parentElement;
+                if (originalDropdown && wrapper && wrapper.parentElement) {
+                    const originalDropdownValue = originalDropdown.querySelector('.Select-value-label, .Select__single-value');
                     const valueText = originalDropdownValue ? originalDropdownValue.textContent : 'N/A';
                     const staticEl = document.createElement('div');
                     staticEl.textContent = valueText;
-                    // Use CSS variables to match the dropdown style from DROPDOWN_CSS
-                    staticEl.style.cssText = `
-                        margin-top: 0px;
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        font-size: 0.9rem;
-                        background-color: var(--bs-body-bg);
-                        border: 1px solid var(--bs-border-color);
-                        color: var(--bs-body-color);
-                    `;
-                    clonedDropdown.parentNode.replaceChild(staticEl, clonedDropdown);
+                    staticEl.className = 'text-end';
+                    staticEl.style.width = '50%';
+                    staticEl.style.fontSize = '0.875em';
+                    staticEl.style.color = 'var(--bs-body-color)';
+                    wrapper.parentElement.replaceChild(staticEl, wrapper);
                 }
             });
 
-            // --- Replace Slider with Static Text ---
+            // 2. Metadata Inputs
+            clone.querySelectorAll('input[id*="metadata-input"]').forEach(input => {
+                if (input.parentElement) {
+                    const valueText = input.value || 'N/A';
+                    const staticEl = document.createElement('div');
+                    staticEl.textContent = valueText;
+                    staticEl.className = 'text-end text-muted';
+                    staticEl.style.fontSize = '0.875em';
+                    input.parentElement.replaceChild(staticEl, input);
+                }
+            });
+
+            // 3. Slider
             const ma_windows = [10, 100, 200, 300, 400, 500];
             const window_size = ma_windows[slider_value_index];
             const sliderContainer = clone.querySelector('#ma-slider-container');
             if (sliderContainer) {
                 const staticEl = document.createElement('div');
-                staticEl.textContent = `Moving Average Window: ${window_size}`;
+                staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
                 staticEl.className = 'mt-3'; // Add some margin
                 staticEl.style.fontWeight = 'bold';
                 sliderContainer.parentNode.replaceChild(staticEl, sliderContainer);
             }
 
+            // --- Remove all interactive/unnecessary elements ---
+            const selectorsToRemove = [
+                '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
+                '#show-data-table-switch-container', '#original-upload-container', '#loading-overlay',
+                '#compare-upload-container', 'span[id*="info-icon"]', 'script', // Remove all script tags
+                '#reload-original-button', '#reload-compare-button',
+                '#discard-original-button', '#discard-compare-button'
+            ];
+            clone.querySelectorAll(selectorsToRemove.join(', ')).forEach(el => el.remove());
+
             // --- Convert Plotly graph to a static image ---
             const graphDiv = clone.querySelector('#progress-graph');
             const originalGraphDiv = document.getElementById('progress-graph');
 
-            if (graphDiv && originalGraphDiv && window.Plotly) {
+            if (graphDiv && originalGraphDiv && window.Plotly && figure) {
                 const tempDiv = document.createElement('div');
                 // Position it off-screen
                 tempDiv.style.position = 'absolute';
@@ -1591,7 +2353,6 @@ app.clientside_callback(
                 document.body.appendChild(tempDiv);
 
                 try {
-                    // Use the figure data passed directly to the callback
                     const data = JSON.parse(JSON.stringify(figure.data));
                     const layout = JSON.parse(JSON.stringify(figure.layout));
 
@@ -1600,7 +2361,7 @@ app.clientside_callback(
                         layout.plot_bgcolor = '#222529';
                     }
 
-                    // --- Increase font sizes for better readability in the saved image ---
+                    // Increase font sizes for better readability in the saved image
                     const fontSizeIncrease = 6; // Increase font size by 6 points
                     if (layout.title) {
                         layout.title.font = layout.title.font || {};
@@ -1632,10 +2393,8 @@ app.clientside_callback(
                         layout.legend.font.size = (layout.legend.font.size || 10) + fontSizeIncrease + 2;
                     }
 
-                    // Create a temporary plot
                     await window.Plotly.newPlot(tempDiv, data, layout);
 
-                    // Render at a slightly larger base size for better readability of text and lines
                     const renderWidth = originalGraphDiv.offsetWidth * 1.4;
                     const renderHeight = originalGraphDiv.offsetHeight * 1.4;
 
@@ -1648,10 +2407,7 @@ app.clientside_callback(
 
                     const img = document.createElement('img');
                     img.src = dataUrl;
-                    // Display the image even larger than its container for better readability.
-                    img.style.width = '150%';
-                    img.style.position = 'relative';
-                    img.style.left = '-25%'; // Center the oversized image
+                    img.style.width = '100%'; // Fit the image to its container
                     img.style.height = 'auto';
                     graphDiv.parentNode.replaceChild(img, graphDiv);
                 } catch (e) {
@@ -1661,10 +2417,9 @@ app.clientside_callback(
                     p.style.color = 'red';
                     graphDiv.parentNode.replaceChild(p, graphDiv);
                 } finally {
-                    // Always remove the temporary div
                     document.body.removeChild(tempDiv);
                 }
-            } else {
+            } else if (graphDiv && graphDiv.parentNode) {
                 if (graphDiv && graphDiv.parentNode) {
                     const p = document.createElement('p');
                     p.innerText = '[Chart not included in this report version.]';
@@ -1683,14 +2438,10 @@ app.clientside_callback(
                             .then(response => response.ok ? response.text() : '')
                             .catch(() => ''); // Silently fail on fetch errors
                     } else if (sheet.cssRules) {
-                        let rules = '';
-                        for (let i = 0; i < sheet.cssRules.length; i++) {
-                            rules += sheet.cssRules[i].cssText;
-                        }
-                        return Promise.resolve(rules);
+                        return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
                     }
                 } catch (e) {
-                    // Silently fail on security errors for cross-origin sheets
+                    // Silently fail on security errors
                 }
                 return Promise.resolve(''); // Return empty promise for unreadable sheets
             });
@@ -1703,60 +2454,18 @@ app.clientside_callback(
             const cleanCssText = cssText.replace(/`/g, '\\`');
             const cleanOuterHtml = clone.outerHTML.replace(/`/g, '\\`');
 
-            // --- Remove unwanted elements from the cloned report ---
-            const elementsToRemove = clone.querySelectorAll('#save-button, #theme-switch, .bi-sun-fill, .bi-moon-stars-fill, #clear-csv-button, #reset-view-button, #show-data-table-switch-container, #original-upload-container, #compare-upload-container, span[id*="info-icon"]');
-            elementsToRemove.forEach(el => el.parentNode.removeChild(el));
-
             // Construct the full HTML document
-            const fullHtml = `
-                <!DOCTYPE html>
-                <html lang="en">
-                    <head>
-                        <meta charset="utf-8">
-                        <title>Sync Progress Reports</title>
-                        <style>
-                            ${cleanCssText}
-                            /* Custom styles for saved report */
-                            body { 
-                                font-family: sans-serif; 
-                            }
-                            .container-fluid { 
-                                max-width: 1200px !important; 
-                                margin: 0 auto !important; 
-                                padding: 20px !important; 
-                                float: none !important;
-                            }
-                            /* Hide interactive elements in case removal fails. */
-                            #save-button, #theme-switch, .bi-sun-fill, .bi-moon-stars-fill, #ma-slider-container, #clear-csv-button, #reset-view-button, #show-data-table-switch-container, #original-upload-container, #compare-upload-container, span[id*="info-icon"] {
-                                display: none !important;
-                            }
-                            /* Ensure all text is selectable */
-                            body, body * {
-                                -webkit-user-select: text !important;
-                                -moz-user-select: text !important;
-                                -ms-user-select: text !important;
-                                user-select: text !important;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        ${cleanOuterHtml}
-                    </body>
-                </html>
-            `;
+            const fullHtml = `<!DOCTYPE html>${cleanOuterHtml}`;
 
-            // Return content for store and a dummy value to deactivate the spinner
-            return [fullHtml, null];
+            return [fullHtml, {}];
         } catch (e) {
             alert('Caught an error in callback: ' + e.message);
-            const error_content = 'CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack;
-            // Return error to store and dummy value for spinner
-            return [error_content, null];
+            return ['CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack, {}];
         }
     }
     """,
     [Output('html-content-store', 'data'),
-     Output('loading-output-for-save', 'children')],
+     Output('save-callback-output', 'figure', allow_duplicate=True)],
     Input('save-button', 'n_clicks'),
     [State('ma-window-slider-progress', 'value'),
      State('progress-graph', 'figure')],
@@ -1765,7 +2474,7 @@ app.clientside_callback(
 
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
-     Output('reports-filepath-store', 'data')],
+     Output('reports-filepath-store', 'data', allow_duplicate=True)],
     Input('html-content-store', 'data'),
     prevent_initial_call=True
 )
@@ -1778,7 +2487,7 @@ def save_report_on_server(html_content):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"sync_progress_reports_{timestamp}.html"
     try:
-        reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+        reports_dir = os.path.join(SCRIPT_DIR, "reports")
         os.makedirs(reports_dir, exist_ok=True)
         filepath = os.path.join(reports_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:

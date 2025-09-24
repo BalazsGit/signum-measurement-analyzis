@@ -5,7 +5,7 @@ python/
 env/
 
 # Generated reports
-report/
+reports/
 
 # assets directory
 assets/
