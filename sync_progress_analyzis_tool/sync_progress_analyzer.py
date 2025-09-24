@@ -905,14 +905,16 @@ app.layout = html.Div([
     [Output('original-data-store', 'data', allow_duplicate=True),
      Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('upload-callback-output', 'figure', allow_duplicate=True),
-     Output('loading-state-store', 'data', allow_duplicate=True)],
+     Output('loading-state-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('upload-original-progress', 'contents'),
-    State('upload-original-progress', 'filename'),
+    [State('upload-original-progress', 'filename'),
+     State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def store_original_data(contents, filename):
+def store_original_data(contents, filename, unsaved_data):
     if not contents:
-        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}
+        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
     loading_data = {'loading': True, 'message': 'Feldolgozás: sync_progress.csv'}
     content_type, content_string = contents.split(',')
@@ -934,26 +936,34 @@ def store_original_data(contents, filename):
 
         store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
         feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
+        
+        # A newly uploaded file is considered "saved".
+        # We must preserve the state of the other file.
+        new_unsaved_data = unsaved_data.copy()
+        new_unsaved_data['Original'] = False
+
         # Set loading overlay OFF
-        return store_data, feedback, None, {'loading': False, 'message': ''}
+        return store_data, feedback, None, {'loading': False, 'message': ''}, new_unsaved_data
     except Exception as e:
         print(f"Error parsing original uploaded file: {e}")
         error_message = f"Failed to load '{filename}'.\n\nError: {e}\n\nPlease ensure it is a valid sync_progress.csv file."
         feedback = {'title': 'Upload Failed', 'body': error_message}
-        return None, feedback, {}, {'loading': False, 'message': ''}
+        return None, feedback, {}, {'loading': False, 'message': ''}, dash.no_update
 
 @app.callback(
     [Output('compare-data-store', 'data', allow_duplicate=True),
      Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('upload-callback-output', 'figure', allow_duplicate=True),
-     Output('loading-state-store', 'data', allow_duplicate=True)],
+     Output('loading-state-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('upload-compare-progress', 'contents'),
-    State('upload-compare-progress', 'filename'),
+    [State('upload-compare-progress', 'filename'),
+     State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def store_compare_data(contents, filename):
+def store_compare_data(contents, filename, unsaved_data):
     if not contents:
-        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}
+        return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
     loading_data = {'loading': True, 'message': 'Feldolgozás: összehasonlító sync_progress.csv'}
     content_type, content_string = contents.split(',')
@@ -975,13 +985,19 @@ def store_compare_data(contents, filename):
 
         store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
         feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
+        
+        # A newly uploaded file is considered "saved".
+        # We must preserve the state of the other file.
+        new_unsaved_data = unsaved_data.copy()
+        new_unsaved_data['Comparison'] = False
+
         # Set loading overlay OFF
-        return store_data, feedback, None, {'loading': False, 'message': ''}
+        return store_data, feedback, None, {'loading': False, 'message': ''}, new_unsaved_data
     except Exception as e:
         print(f"Error parsing original uploaded file: {e}")
         error_message = f"Failed to load '{filename}'.\n\nError: {e}\n\nPlease ensure it is a valid sync_progress.csv file."
         feedback = {'title': 'Upload Failed', 'body': error_message}
-        return None, feedback, {}, {'loading': False, 'message': ''}
+        return None, feedback, {}, {'loading': False, 'message': ''}, dash.no_update
 # --- Loading overlay control callback ---
 @app.callback(
     Output('loading-overlay', 'style', allow_duplicate=True),
@@ -1080,29 +1096,38 @@ def update_compare_upload_text(data):
 
 @app.callback(
     [Output('original-data-store', 'data'),
-     Output('upload-original-progress', 'contents', allow_duplicate=True)],
+     Output('upload-original-progress', 'contents', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('discard-original-button', 'n_clicks'),
+    State('unsaved-changes-store', 'data'),
     prevent_initial_call=True
 )
-def discard_original_data(n_clicks):
+def discard_original_data(n_clicks, unsaved_data):
     """Clears the original data store and resets the upload component when the discard button is clicked."""
     if not n_clicks:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
+    
+    new_unsaved_data = unsaved_data.copy()
+    new_unsaved_data['Original'] = False
     # Setting store to None clears data, setting contents to None resets the Upload component
-    return None, None
+    return None, None, new_unsaved_data
 
 @app.callback(
     [Output('compare-data-store', 'data', allow_duplicate=True),
-     Output('upload-compare-progress', 'contents', allow_duplicate=True)],
+     Output('upload-compare-progress', 'contents', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('discard-compare-button', 'n_clicks'),
+    State('unsaved-changes-store', 'data'),
     prevent_initial_call=True
 )
-def discard_compare_data(n_clicks):
+def discard_compare_data(n_clicks, unsaved_data):
     """Clears the comparison data store and resets the upload component when the discard button is clicked."""
     if not n_clicks:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
+    new_unsaved_data = unsaved_data.copy()
+    new_unsaved_data['Comparison'] = False
     # Setting store to None clears data, setting contents to None resets the Upload component
-    return None, None
+    return None, None, new_unsaved_data
 
 @app.callback(
     Output('discard-original-button', 'style'),
@@ -1146,12 +1171,14 @@ def toggle_reload_compare_button(data):
 
 @app.callback(
     [Output('original-data-store', 'data', allow_duplicate=True),
-     Output('action-feedback-store', 'data', allow_duplicate=True)],
+     Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('reload-original-button', 'n_clicks'),
-    State('original-data-store', 'data'),
+    [State('original-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def reload_original_data(n_clicks, store_data):
+def reload_original_data(n_clicks, store_data, unsaved_data):
     if not n_clicks or not store_data or not store_data.get('filename'):
         raise dash.exceptions.PreventUpdate
     
@@ -1164,19 +1191,22 @@ def reload_original_data(n_clicks, store_data):
 
     if not os.path.exists(filepath):
         feedback = {'title': 'Reload Failed', 'body': f"File not found at expected path: {filepath}"}
-        return dash.no_update, feedback
+        return dash.no_update, feedback, dash.no_update
 
     new_store_data, feedback = load_csv_from_path(filepath)
     
     if new_store_data:
         new_store_data['filename'] = filepath
-        return new_store_data, feedback
+        new_unsaved_data = unsaved_data.copy()
+        new_unsaved_data['Original'] = False
+        return new_store_data, feedback, new_unsaved_data
     else:
-        return dash.no_update, feedback
+        return dash.no_update, feedback, dash.no_update
 
 @app.callback(
     [Output('compare-data-store', 'data', allow_duplicate=True),
-     Output('action-feedback-store', 'data', allow_duplicate=True)],
+     Output('action-feedback-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('reload-compare-button', 'n_clicks'),
     State('compare-data-store', 'data'),
     prevent_initial_call=True
@@ -1194,15 +1224,19 @@ def reload_compare_data(n_clicks, store_data):
 
     if not os.path.exists(filepath):
         feedback = {'title': 'Reload Failed', 'body': f"File not found at expected path: {filepath}"}
-        return dash.no_update, feedback
+        return dash.no_update, feedback, dash.no_update
 
     new_store_data, feedback = load_csv_from_path(filepath)
     
     if new_store_data:
         new_store_data['filename'] = filepath
-        return new_store_data, feedback
+        # Since we are reloading, this file is now considered "saved"
+        # We need to read the current state of unsaved changes and update it.
+        current_unsaved = dash.callback_context.states['unsaved-changes-store.data']
+        current_unsaved['Comparison'] = False
+        return new_store_data, feedback, current_unsaved
     else:
-        return dash.no_update, feedback
+        return dash.no_update, feedback, dash.no_update
 
 # --- Callback to Update Progress Graph ---
 @app.callback(
@@ -2119,15 +2153,17 @@ def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filte
     data_to_save = original_data if prefix == 'Original' else compare_data
 
     if data_to_save:
+        # Create a copy to avoid modifying the state directly
+        new_unsaved_data = unsaved_data.copy()
         if save_as:
             message = write_csv_new(data_to_save, filter_range, start_block, end_block)
         else:
             message = write_csv_overwrite(data_to_save, filter_range, start_block, end_block)
         
         if 'Error' not in message:
-            unsaved_data[prefix] = False
+            new_unsaved_data[prefix] = False
 
-    return {'title': 'Save to CSV', 'body': message}, unsaved_data, {}
+    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, {}
 
 @app.callback(
     Output('theme-switch', 'value'),
