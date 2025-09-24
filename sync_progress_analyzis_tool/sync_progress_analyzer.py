@@ -605,7 +605,41 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
         row_cells = [metric_cell]
         if has_original:
             original_val_display = stats_original.get(metric, {}).get('display', 'N/A')
-            row_cells.append(html.Td(original_val_display))
+            original_cell_content = [original_val_display]
+
+            if has_comparison:
+                original_raw = stats_original.get(metric, {}).get('raw')
+                compare_raw = stats_compare.get(metric, {}).get('raw')
+
+                if original_raw is not None and compare_raw is not None:
+                    diff = original_raw - compare_raw
+                    color_class = ""
+                    is_better = None
+                    hib = higher_is_better.get(metric)
+
+                    if diff != 0:
+                        if hib == 'closer_to_zero':
+                            if abs(original_raw) < abs(compare_raw): is_better = True
+                            elif abs(original_raw) > abs(compare_raw): is_better = False
+                        elif hib is True:
+                            if diff > 0: is_better = True
+                            if diff < 0: is_better = False
+                        elif hib is False:
+                            if diff < 0: is_better = True
+                            if diff > 0: is_better = False
+
+                    if is_better is True: color_class = "text-success"
+                    elif is_better is False: color_class = "text-danger"
+
+                    if color_class:
+                        if metric == 'Total Sync in Progress Time':
+                            sign = "+" if diff > 0 else "-"
+                            diff_str = f"{sign}{format_seconds(abs(diff))} ({sign}{int(abs(diff))}s)"
+                        else:
+                            diff_str = f"{diff:+.2f}" if not isinstance(diff, str) else diff
+                        original_cell_content.append(html.Span(f" ({diff_str})", className=f"small {color_class} fw-bold"))
+
+            row_cells.append(html.Td(original_cell_content))
 
         # Comparison value cell (with difference)
         if has_comparison:
@@ -1455,7 +1489,24 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
         gridwidth=1,
         showgrid=True # Ensure grid is visible for the secondary axis
     )
-    fig.update_xaxes(title_text="Sync in Progress Time [s]")
+
+    # --- Custom X-axis tick labels ---
+    # Determine the range of the x-axis from all plotted data
+    x_min, x_max = float('inf'), float('-inf')
+    if not df_original_display.empty:
+        x_min = min(x_min, df_original_display['Accumulated_sync_in_progress_time[s]'].min())
+        x_max = max(x_max, df_original_display['Accumulated_sync_in_progress_time[s]'].max())
+    if not df_compare_display.empty:
+        x_min = min(x_min, df_compare_display['Accumulated_sync_in_progress_time[s]'].min())
+        x_max = max(x_max, df_compare_display['Accumulated_sync_in_progress_time[s]'].max())
+
+    if x_min != float('inf') and x_max != float('-inf'):
+        # Generate about 5-10 tick values
+        tick_values = pd.to_numeric(pd.Series(pd.date_range(start=pd.to_datetime(x_min, unit='s'), end=pd.to_datetime(x_max, unit='s'), periods=8)).astype(int) / 10**9)
+        tick_text = [f"{int(val):,} sec<br>({format_seconds(val)})" for val in tick_values]
+        fig.update_xaxes(tickvals=tick_values, ticktext=tick_text)
+
+    fig.update_xaxes(title_text="Sync in Progress Time [s]", automargin=True)
 
     # --- Prepare outputs for dropdowns ---
     # The order of outputs is determined by Dash. We can get it from ctx.outputs_list.
@@ -1976,10 +2027,12 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
 
     df = pd.read_json(io.StringIO(df_json), orient='split')
 
+    timestamp_part = ""
     suffix = ""
     if filter_range and start_block is not None and end_block is not None:
         df = df[(df['Block_height'] >= start_block) & (df['Block_height'] <= end_block)]
         suffix += f"_range_{int(start_block)}-{int(end_block)}"
+        timestamp_part = f"_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     output = io.StringIO()
     if metadata:
@@ -2008,7 +2061,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
             sanitized_hostname = re.sub(r'[^\w\.\-]', '_', hostname)
             hostname_part = f"_hostname_{sanitized_hostname}"
 
-        new_filename = f"{base}{suffix}{hostname_part}.csv"
+        new_filename = f"{base}{suffix}{hostname_part}{timestamp_part}.csv"
         filepath = os.path.join(saved_dir, new_filename)
 
         with open(filepath, "w", encoding="utf-8") as f:
@@ -2142,18 +2195,27 @@ def update_metadata_display(original_data, compare_data):
                 ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 key_with_icon.append(info_icon)
 
+            delete_button = html.Span([
+                html.I(className="bi bi-dash-circle-fill text-danger align-middle", style={'fontSize': '1.1em'}),
+            ],
+                id={'type': 'delete-metadata-button', 'prefix': title_prefix, 'key': key},
+                n_clicks=0,
+                style={'cursor': 'pointer'},
+                title='Delete item',
+                className="ms-2"
+            )
+
             return dbc.ListGroupItem(
                 [
                     html.Div(key_with_icon, style={'display': 'flex', 'alignItems': 'center'}),
-                    dbc.Input(
-                        id={'type': 'metadata-input', 'prefix': title_prefix, 'key': key},
-                        value=str(value),
-                        type='text',
-                        className="text-end text-muted",
-                        size="sm",
-                        style={'border': 'none', 'backgroundColor': 'transparent', 'boxShadow': 'none', 'padding': '0', 'margin': '0', 'height': 'auto'},
-                        debounce=True
-                    )
+                    html.Div([
+                        dbc.Input(
+                            id={'type': 'metadata-input', 'prefix': title_prefix, 'key': key},
+                            value=str(value), type='text', className="text-end text-muted", size="sm",
+                            style={'border': 'none', 'backgroundColor': 'transparent', 'boxShadow': 'none', 'padding': '0', 'margin': '0', 'height': 'auto'},
+                            debounce=True),
+                        delete_button
+                    ], className="d-flex align-items-center")
                 ],
                 className="d-flex justify-content-between align-items-center p-2"
             )
@@ -2265,6 +2327,37 @@ def update_metadata_display(original_data, compare_data):
 
     return original_display, original_style, compare_display, compare_style
 
+@app.callback(
+    [Output('original-data-store', 'data', allow_duplicate=True),
+     Output('compare-data-store', 'data', allow_duplicate=True),
+     Output('unsaved-changes-store', 'data', allow_duplicate=True)],
+    [Input({'type': 'delete-metadata-button', 'prefix': dash.dependencies.ALL, 'key': dash.dependencies.ALL}, 'n_clicks')],
+    [State('original-data-store', 'data'),
+     State('compare-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
+    prevent_initial_call=True
+)
+def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
+    ctx = dash.callback_context
+    if not ctx.triggered or not any(n['value'] for n in ctx.triggered if n['value'] is not None):
+        raise dash.exceptions.PreventUpdate
+
+    triggered_id = ctx.triggered_id
+    prefix = triggered_id['prefix']
+    key_to_delete = triggered_id['key']
+
+    if prefix == 'Original' and original_data and 'metadata' in original_data:
+        if key_to_delete in original_data['metadata']:
+            del original_data['metadata'][key_to_delete]
+            unsaved_data['Original'] = True
+            return original_data, dash.no_update, unsaved_data
+    elif prefix == 'Comparison' and compare_data and 'metadata' in compare_data:
+        if key_to_delete in compare_data['metadata']:
+            del compare_data['metadata'][key_to_delete]
+            unsaved_data['Comparison'] = True
+            return dash.no_update, compare_data, unsaved_data
+
+    raise dash.exceptions.PreventUpdate
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
 # --- Callbacks for saving HTML report ---
