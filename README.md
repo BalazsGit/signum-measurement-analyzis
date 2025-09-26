@@ -35,6 +35,21 @@ Understanding the synchronization performance of a `signum-node` is crucial for 
 - **Python 3**: Ensure that Python 3 is installed on your system.
 - **pip**: The Python package manager is required to install dependencies.
 
+### Recommended Launch on Windows (Portable Setup)
+
+For Windows users, the easiest way to run the tool is by using the provided startup script, which automates the entire setup process. This method does not require a pre-existing Python installation.
+
+1.  Double-click the `start_sync_progress_analyzer.bat` file.
+
+This batch file executes the `start_sync_progress_analyzer.ps1` PowerShell script, which performs the following steps automatically:
+-   **Portable Python**: It checks for a local, portable Python installation within the tool's `python` subdirectory. If it's not found, it downloads and unpacks a compatible version.
+-   **Dependency Management**: It ensures `pip` (the Python package manager) is available and then installs or updates all required libraries (`dash`, `pandas`, `plotly`, etc.).
+-   **Application Launch**: Once the environment is ready, it automatically starts the `sync_progress_analyzer.py` application.
+
+This is the recommended method for Windows as it provides a self-contained environment and ensures that all dependencies are correct and up-to-date on every launch.
+
+### Manual Launch (All Platforms)
+
 ### Launching the Tool
 
 1.  Navigate to the tool's directory in your terminal:

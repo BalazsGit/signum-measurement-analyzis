@@ -1630,13 +1630,40 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
 
                 # Add original columns' cells
                 for display_name in data_col_names.values():
-                    val = row.get(f"{display_name}_orig")
-                    if pd.isna(val):
-                        row_data.append(html.Td(""))
-                    elif isinstance(val, float):
-                        row_data.append(html.Td(f"{val:.2f}"))
+                    orig_val = row.get(f"{display_name}_orig")
+
+                    # Format the main value
+                    if pd.isna(orig_val):
+                        cell_content = [""]
+                    elif isinstance(orig_val, float):
+                        cell_content = [f"{orig_val:.2f}"]
                     else:
-                        row_data.append(html.Td(val))
+                        cell_content = [str(orig_val)]
+
+                    # Calculate and add the difference if it's a numeric metric
+                    if display_name in numeric_metrics_info:
+                        comp_val = row.get(f"{display_name}_comp")
+                        if pd.notna(orig_val) and pd.notna(comp_val):
+                            diff = orig_val - comp_val
+                            is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
+                            color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
+                            if color_class:
+                                if display_name == 'Sync Time (s)':
+                                    diff_str = f" ({diff:+.2f}s)"
+                                else:
+                                    diff_str = f" ({diff:+.2f})"
+                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
+                    elif display_name == 'Sync Time (Formatted)':
+                        orig_s_val = row.get('Sync Time (s)_orig')
+                        comp_s_val = row.get('Sync Time (s)_comp')
+                        if pd.notna(orig_s_val) and pd.notna(comp_s_val):
+                            diff = orig_s_val - comp_s_val
+                            color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
+                            if color_class:
+                                sign = "+" if diff > 0 else "-"
+                                diff_str = f" ({sign}{format_seconds(abs(diff))})"
+                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
+                    row_data.append(html.Td(cell_content))
 
                 # Add comparison columns' cells
                 for i, display_name in enumerate(data_col_names.values()):
@@ -2460,13 +2487,63 @@ app.clientside_callback(
 
             // --- Remove all interactive/unnecessary elements ---
             const selectorsToRemove = [
+                // General UI controls
                 '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
-                '#show-data-table-switch-container', '#original-upload-container', '#loading-overlay',
-                '#compare-upload-container', 'span[id*="info-icon"]', 'script', // Remove all script tags
+                '#show-data-table-switch-container', '#original-upload-container', '#compare-upload-container', 'span[id*="info-icon"]',
+                'script', '#loading-overlay',
+                '#_dash-dev-tools-ui-container', // Dash Dev Tools main container
+                // Dash developer/debug panels and error overlays (Dash 3.x)
+                '#_dash-debug-menu',
+                '.dash-debug-menu',
+                '.dash-debug-menu__button',
+                '.dash-debug-menu__title',
+                '.dash-debug-menu__version',
+                '.dash-debug-menu__server',
+                '.dash-debug-menu__status',
+                '.dash-debug-menu__icon',
+                '.dash-debug-menu__indicator',
+                '.dash-debug-menu__status--success',
+                '.dash-debug-menu__status--error',
+                '.bi-arrow-bar-left',
+                '.bi-arrow-left',
+                '.bi-arrow-return-left',
+                '.dash-error-message',
+                '.dash-fe-error__title',
+                '.dash-fe-error__message',
+                '.dash-fe-error__stack',
+                '.dash-dev-tools-menu',
+                '.dash-dev-tools-menu__button',
+                '.dash-dev-tools-menu__title',
+                '.dash-dev-tools-menu__version',
+                '.dash-dev-tools-menu__server',
+                // Reload and discard buttons
                 '#reload-original-button', '#reload-compare-button',
-                '#discard-original-button', '#discard-compare-button'
+                '#discard-original-button', '#discard-compare-button',
+                // Individual metadata controls
+                'span[id*="delete-metadata-button"]',
+                'span[id*="unsaved-changes-badge"]'
             ];
-            clone.querySelectorAll(selectorsToRemove.join(', ')).forEach(el => el.remove());
+            // Remove any undefined or empty selectors to avoid JS errors
+            const validSelectorsToRemove = selectorsToRemove.filter(s => typeof s === 'string' && s.length > 0);
+            const extraArrowSelectors = [
+                '.dash-debug-menu__outer'
+                ,'.dash-debug-menu__outer--expanded'
+                ,'.dash-debug-menu__toggle'
+                ,'.dash-debug-menu__toggle--expanded'
+            ];
+            const allSelectorsToRemove = validSelectorsToRemove.concat(extraArrowSelectors);
+            clone.querySelectorAll(allSelectorsToRemove.join(', ')).forEach(el => el.remove());
+
+            // --- Remove entire rows for certain controls ---
+            const rowSelectorsToRemove = [
+                'button[id*="add-metadata-button"]', // The "Add" button and its row
+                'button[id*="reset-view-button"]', // The entire bar with Reset, Clear, and Save buttons
+                'button[id*="save-overwrite-button"]'
+            ];
+            clone.querySelectorAll(rowSelectorsToRemove.join(', ')).forEach(el => {
+                const parentRow = el.closest('.list-group-item');
+                if (parentRow) parentRow.remove();
+            });
 
             // --- Convert Plotly graph to a static image ---
             const graphDiv = clone.querySelector('#progress-graph');
@@ -2565,26 +2642,29 @@ app.clientside_callback(
                     if (sheet.href) {
                         return fetch(sheet.href)
                             .then(response => response.ok ? response.text() : '')
-                            .catch(() => ''); // Silently fail on fetch errors
+                            .catch(() => '');
                     } else if (sheet.cssRules) {
                         return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
                     }
                 } catch (e) {
-                    // Silently fail on security errors
+                    // Silently fail on security errors for cross-origin stylesheets
                 }
-                return Promise.resolve(''); // Return empty promise for unreadable sheets
-            });
+                return undefined; // Return undefined for sheets that can't be processed
+            }).filter(p => p); // Filter out undefined promises
 
             const cssContents = await Promise.all(cssPromises);
             cssText = cssContents.join('\\n'); // Use '\\n' for JS newlines
 
             // --- Escape backticks and other problematic characters ---
-            // Only backticks need escaping inside a template literal.
             const cleanCssText = cssText.replace(/`/g, '\\`');
-            const cleanOuterHtml = clone.outerHTML.replace(/`/g, '\\`');
 
             // Construct the full HTML document
-            const fullHtml = `<!DOCTYPE html>${cleanOuterHtml}`;
+            const fullHtml = `
+                <!DOCTYPE html>
+                <html lang="en" data-bs-theme="${isDarkTheme ? 'dark' : 'light'}"><head><meta charset="utf-8"><title>Sync Progress Report</title><style>${cleanCssText}</style></head>
+                <body>${clone.querySelector('body').innerHTML}</body>
+                </html>
+            `;
 
             return [fullHtml, {}];
         } catch (e) {
