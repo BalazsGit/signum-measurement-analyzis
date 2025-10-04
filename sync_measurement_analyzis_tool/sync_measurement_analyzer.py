@@ -341,9 +341,11 @@ def load_csv_from_path(filepath):
         df = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=';')
         df.columns = df.columns.str.strip()
 
-        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
-        if not all(col in df.columns for col in required_cols):
-            missing_cols = [col for col in required_cols if col not in df.columns]
+        # Check for required columns, allowing for either ms or s time format
+        has_time_col = 'Accumulated_sync_in_progress_time[s]' in df.columns or 'Accumulated_sync_in_progress_time[ms]' in df.columns
+        has_block_height = 'Block_height' in df.columns
+        if not (has_time_col and has_block_height):
+            missing_cols = [col for col in ['Block_height', 'Accumulated_sync_in_progress_time[s/ms]'] if col not in df.columns]
             raise ValueError(f"The file is missing essential columns: {', '.join(missing_cols)}.")
 
         store_data = {'filename': filepath, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
@@ -467,7 +469,7 @@ tooltip_texts = {
     },
     'Transactions per Block': {
         'title': 'Transactions per Block',
-        'body': "TODO: change explanation. The 75th percentile (or third quartile, Q3) for the number of transactions per block. 75% of the blocks in the sample had this many transactions or fewer, indicating the upper range of typical block fullness."
+        'body': "Statistical analysis of the total number of transactions (user-submitted and system-generated) per block. This provides insights into the network's activity and block space utilization."
     },
     'Q3 - Transactions per Block': {
         'title': 'Q3 - Transactions per Block',
@@ -645,7 +647,7 @@ tooltip_texts = {
     },
     'Sync Speed [Blocks/sec sample]': {
         'title': 'Sync Speed [Blocks/sec Sampled]',
-        'body': "TODO: change explanation. This metric shows the minimum synchronization speed observed between any two consecutive data points in the sample. A very low or zero value can indicate periods of network latency, slow peer response, or high computational load on the node (e.g., during verification of blocks with many complex transactions), causing a temporary stall in progress."
+        'body': "Statistical analysis of the synchronization speed, calculated as the number of blocks processed between data points, divided by the time elapsed. This provides insights into the node's performance, which can fluctuate based on network conditions and block complexity."
     },
     'Min Sync Speed [Blocks/sec sample]': {
         'title': 'Min Sync Speed [Blocks/sec Sampled]',
@@ -672,7 +674,7 @@ tooltip_texts = {
         'body': "This metric captures the peak synchronization speed achieved between any two consecutive data points. High maximum values typically occur when the node receives a burst of blocks from a fast peer with low latency, often during periods where the blocks being processed are less computationally intensive."
     },
     'Std Dev of Sync Speed [Blocks/sec sample]': {
-        'title': 'Std Dev of Sync Speed [Blocks/sec Sampled]',
+        'title': 'Std Dev - Sync Speed [Blocks/sec sample]',
         'body': "The standard deviation measures the amount of variation or dispersion of the sampled 'Blocks/sec' values. A low standard deviation indicates that the sync speed was relatively consistent and stable. A high standard deviation suggests significant volatility in performance, with large fluctuations between fast and slow periods. This can be caused by inconsistent network conditions, varying peer quality, or changes in block complexity."
     },
     'Total Transactions': {
@@ -684,7 +686,7 @@ tooltip_texts = {
         'body': "This value indicates the total number of Automated Transactions (ATs) that have been executed by the node during the measurement period. This metric is fundamental for calculating the overall AT execution rate."
     },
     'Skewness of Sync Speed [Blocks/sec sample]': {
-        'title': 'Skewness of Sync Speed [Blocks/sec Sampled]',
+        'title': 'Skewness - Sync Speed [Blocks/sec sample]',
         'body': "Skewness is a measure of the asymmetry of the performance data distribution.\n\n- A value near 0 indicates a roughly symmetrical distribution, where performance fluctuates evenly around the mean.\n- A positive value (right-skewed) suggests that the dataset has a long tail of high-speed values. This means the sync speed is often clustered at lower values with occasional bursts of very high speed.\n- A negative value (left-skewed) indicates a long tail of low-speed values. This typically means the sync speed is consistently high but is occasionally dragged down by periods of slowness."
     },
     'Moving Average Window': {
@@ -816,6 +818,7 @@ def create_info_icon(metric_id):
 
 def get_stats_dict(df):
     """Helper to calculate stats for a single dataframe, returning both display and raw values."""
+
     if df.empty or len(df) < 2:
         na_result = {'display': 'N/A', 'raw': None}
         return {
@@ -835,12 +838,14 @@ def get_stats_dict(df):
 
     # BPS stats
     bps_series = df['Blocks_per_Second'].iloc[1:] if 'Blocks_per_Second' in df.columns else pd.Series(dtype=float)
+
     if bps_series.empty:
         stats = pd.Series(index=['min', '25%', 'mean', '50%', '75%', 'max', 'std'], dtype=float).fillna(0)
         skewness = 0.0
     else:
         stats = bps_series.describe(percentiles=[.25, .75])
         skewness = bps_series.skew()
+
 
     # Transaction Count stats
     tx_series = df['All_transaction_count'] if 'All_transaction_count' in df.columns else pd.Series(dtype=float)
@@ -900,21 +905,20 @@ def get_stats_dict(df):
         'Misc Time [ms]': 'Misc_time[ms]',
         }
     
-    result = {
+    result = { # This was the source of the bug. It was overwriting the previously calculated stats.
         'Total Sync in Progress Time': {'display': f"{format_seconds(total_sync_seconds)} ({int(total_sync_seconds)}s)", 'raw': total_sync_seconds},
         'Total Blocks Synced': {'display': f"{total_blocks_synced:,}", 'raw': float(total_blocks_synced)},
         'Total Transactions': {'display': f"{total_transactions:,}", 'raw': float(total_transactions)},
         'Total ATs Executed': {'display': f"{total_ats_executed:,}", 'raw': float(total_ats_executed)},
         'Overall Average Sync Speed [Blocks/sec]': {'display': f"{overall_avg_bps:.2f}", 'raw': overall_avg_bps},
-        'HEADER_Sync Speed [Blocks/sec sample]': {'display': '', 'raw': None},
-        'Min - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
-        'Q1 - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
-        'Mean - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
-        'Median - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
-        'Q3 - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
-        'Max - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
-        'Std Dev - Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
-        'Skewness - Sync Speed [Blocks/sec sample]': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0},
+        'Min Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
+        'Q1 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
+        'Mean Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
+        'Median Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
+        'Q3 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
+        'Max Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
+        'Std Dev of Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
+        'Skewness of Sync Speed [Blocks/sec sample]': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0},
         'HEADER_Transactions per Block': {'display': '', 'raw': None},
         'Min - Transactions per Block': {'display': f"{tx_stats.get('min', 0):.2f}", 'raw': tx_stats.get('min', 0.0)},
         'Q1 - Transactions per Block': {'display': f"{tx_stats.get('25%', 0):.2f}", 'raw': tx_stats.get('25%', 0.0)},
@@ -973,8 +977,7 @@ def create_combined_summary_table(df_original=pd.DataFrame(), df_compare=pd.Data
         'HEADER_Sync Speed [Blocks/sec sample]',
         'Min Sync Speed [Blocks/sec sample]', 'Q1 Sync Speed [Blocks/sec sample]',
         'Mean Sync Speed [Blocks/sec sample]', 'Median Sync Speed [Blocks/sec sample]',
-        'Q3 Sync Speed [Blocks/sec sample]', 'Max Sync Speed [Blocks/sec sample]', 'Std Dev of Sync Speed [Blocks/sec sample]',
-        'Skewness of Sync Speed [Blocks/sec sample]',
+        'Q3 Sync Speed [Blocks/sec sample]', 'Max Sync Speed [Blocks/sec sample]', 'Std Dev of Sync Speed [Blocks/sec sample]', 'Skewness of Sync Speed [Blocks/sec sample]',
         'HEADER_Transactions per Block',
         'Min - Transactions per Block', 'Q1 - Transactions per Block', 'Mean - Transactions per Block',
         'Median - Transactions per Block', 'Q3 - Transactions per Block', 'Max - Transactions per Block',
@@ -1266,28 +1269,26 @@ def process_progress_df(df, filename=""):
     if df.empty:
         return df
 
-    # For BPS calculation, we need the 'in_progress' time.
-    # NOTE: Due to a bug in some node versions, for sync_measurement.csv,
-    # the 'Accumulated_sync_time[ms]' column actually contains the "in-progress" time data,
-    # while the header is swapped with 'Accumulated_sync_in_progress_time[ms]'.
-    # This logic prioritizes the correct column for BPS calculation.
-    
     time_col_s = 'Accumulated_sync_in_progress_time[s]'
-    
-    # This column has the correct 'in-progress' data due to the bug in sync_measurement.csv
-    sync_in_progress_col_ms_bugged = 'Accumulated_sync_time[ms]'
-    # This would be the correct column in a fixed sync_measurement.csv
     sync_in_progress_col_ms_correct = 'Accumulated_sync_in_progress_time[ms]'
+    sync_progress_col_s = 'Accumulated_sync_in_progress_time[s]'
 
     time_col = None
 
-    if sync_in_progress_col_ms_bugged in df.columns:
-        # Handle the bugged case: use the data from the 'total time' column for 'in-progress' calculations
-        df[time_col_s] = df[sync_in_progress_col_ms_bugged] / 1000
-        time_col = time_col_s
-    elif sync_in_progress_col_ms_correct in df.columns:
-        # Fallback for a potentially fixed file in the future.
+    # Determine the file type and the correct time column to use for BPS calculation.
+    # sync_measurement.csv uses milliseconds, sync_progress.csv uses seconds.
+    if sync_in_progress_col_ms_correct in df.columns:
+        # This is a sync_measurement.csv file.
+        # The time is in milliseconds, so convert it to seconds.
         df[time_col_s] = df[sync_in_progress_col_ms_correct] / 1000
+        time_col = time_col_s
+    elif sync_progress_col_s in df.columns:
+        # This is a sync_progress.csv file.
+        # The time is already in seconds.
+        time_col = sync_progress_col_s
+    elif 'Accumulated_sync_time[ms]' in df.columns:
+        # Fallback for older/bugged sync_measurement.csv where the in-progress time might be in this column.
+        df[time_col_s] = df['Accumulated_sync_time[ms]'] / 1000
         time_col = time_col_s
     else:
         print(f"Warning: DataFrame from '{filename}' does not contain a recognized time column for sync speed calculation.")
@@ -2825,10 +2826,10 @@ def hide_no_file_alert(original_data):
 )
 def show_tooltip_modal(n_clicks):
     ctx = dash.callback_context
-    # This is the most robust way to check for a real user click.
-    # It verifies that the callback was triggered and that the trigger value is a positive integer (not None or 0).
-    # This prevents the modal from appearing when its inputs are re-rendered by another callback (e.g., by the slider).
-    if not ctx.triggered or not ctx.triggered[0]['value']:
+    # This callback can be triggered by a click (n_clicks > 0) or by a component being
+    # re-rendered (n_clicks is None). We only want to open the modal on a real click.
+    # The check `not any(n > 0 for n in n_clicks if n is not None)` handles this.
+    if not ctx.triggered or not any(n for n in n_clicks if n is not None):
         raise dash.exceptions.PreventUpdate
     triggered_id_dict = ctx.triggered_id
     # A final safety check in case the triggered_id is None
