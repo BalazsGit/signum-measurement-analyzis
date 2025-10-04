@@ -443,6 +443,18 @@ tooltip_texts = {
         'title': 'Clear CSV',
         'body': "This button filters the currently loaded CSV data in memory, keeping only the header, the first data row (block 0), and every 5000th block thereafter. This action does not affect the original file on disk but updates the current session's data, which can improve performance and make long-term trends easier to see. All metadata is preserved. To save the filtered data, use the 'Save' or 'Save As...' buttons."
     },
+    'Start Block Height': {
+        'title': 'Start Block Height',
+        'body': "Select the starting block height for the analysis range. The graphs and metrics will be calculated for the data from this block onwards."
+    },
+    'End Block Height': {
+        'title': 'End Block Height',
+        'body': "Select the ending block height for the analysis range. The graphs and metrics will be calculated for the data up to this block."
+    },
+    'Add Metadata': {
+        'title': 'Add Metadata',
+        'body': "Add a new custom property and value to the metadata of this file. This information will be saved with the file when using 'Save' or 'Save As...'."
+    },
     'Block Height': {
         'title': 'Block Height',
         'body': "The sequential number of a block in the blockchain. It represents a specific point in the history of the ledger. This table shows data sampled at various block heights."
@@ -562,9 +574,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     header_cells = [html.Th("Metric")]
     if has_original:
-        header_cells.append(html.Th(title_original))
+        header_cells.append(html.Th(title_original, style={'word-break': 'break-all'}))
     if has_comparison:
-        header_cells.append(html.Th(title_compare))
+        header_cells.append(html.Th(title_compare, style={'word-break': 'break-all'}))
 
     table_header = [html.Thead(html.Tr(header_cells))]
     
@@ -589,7 +601,7 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
         title = info.get('title', metric)
         if metric in tooltip_texts:
             info_icon = html.Span([
-                " ",
+                "\u00A0",  # Non-breaking space
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
                 id={'type': 'info-icon', 'metric': metric}, # type: ignore
@@ -695,7 +707,7 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     return html.Div([
         html.H5("Metrics Summary", className="mt-4"),
-        dbc.Table(table_header + table_body, striped=True, bordered=True, hover=True, className="mt-2")
+        dbc.Table(table_header + table_body, striped=True, bordered=True, hover=True, className="mt-2", responsive=True)
     ])
 
 def process_progress_df(df, filename=""):
@@ -738,7 +750,8 @@ app = dash.Dash(
     external_stylesheets=[
         dbc.themes.BOOTSTRAP,
         "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"
-    ]
+    ],
+    title="Sync Progress Reports"
 )
 
 # --- Common Styles ---
@@ -785,12 +798,13 @@ app.layout = html.Div([
     dcc.Store(id='compare-data-store'), # No initial data for comparison
     dcc.Store(id='action-feedback-store'), # For modal feedback
     dcc.Store(id='unsaved-changes-store', data={'Original': False, 'Comparison': False}),
+    dcc.Store(id='reset-upload-store'), # To trigger clientside upload reset
     dcc.Store(id='html-content-store'), # For saving HTML content
         dbc.Row([
         dbc.Col(html.H1("Sync Progress Reports", className="mt-3 mb-4"), width="auto", className="me-auto"),
         dbc.Col([
             dbc.Button(html.I(className="bi bi-save"), id="save-button", color="secondary", className="me-3", title="Save Reports as HTML"),
-            html.I(className="bi bi-sun-fill", style={'color': 'orange', 'fontSize': '1.2rem'}),
+            html.I(className="bi bi-sun-fill", style={'color': 'orange', 'fontSize': '1.2rem', 'verticalAlign': 'middle'}),
             dbc.Switch(id="theme-switch", value=True, className="d-inline-block mx-2"),
             html.I(className="bi bi-moon-stars-fill", style={'color': 'royalblue', 'fontSize': '1.2rem'}),
         ], width="auto", className="d-flex align-items-center mt-3")
@@ -815,7 +829,7 @@ app.layout = html.Div([
                 dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-original-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-original-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
                 html.Span([ # type: ignore
-                    " ",
+                    "\u00A0",  # Non-breaking space
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                 ],
                     id={'type': 'info-icon', 'metric': 'Original File'}, # type: ignore
@@ -835,7 +849,7 @@ app.layout = html.Div([
                 ), style={'flexGrow': 1}),
                 dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-compare-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-compare-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
-                html.Span([ " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}), ], id={'type': 'info-icon', 'metric': 'Comparison File'}, style={'cursor': 'pointer', 'marginLeft': '10px'}, title='Click for more info', n_clicks=0), # type: ignore
+                html.Span([ "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}), ], id={'type': 'info-icon', 'metric': 'Comparison File'}, style={'cursor': 'pointer', 'marginLeft': '10px'}, title='Click for more info', n_clicks=0), # type: ignore
             ], style={'display': 'flex', 'alignItems': 'center'}, id='compare-upload-container'),
             html.Div(id='compare-metadata-display', className="mt-3")
         ]),
@@ -844,8 +858,8 @@ app.layout = html.Div([
         dcc.Graph(id="progress-graph", className="my-4"),
         html.Div([
             html.Label("Moving Average Window:", style={'marginRight': '5px'}),
-            html.Span([
-                " ",
+            html.Span([ # type: ignore
+                "\u00A0",  # Non-breaking space
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
             id={'type': 'info-icon', 'metric': 'Moving Average Window'},
@@ -854,7 +868,7 @@ app.layout = html.Div([
             n_clicks=0
             ), # type: ignore
             html.Div(
-                dcc.Slider(
+                dcc.Slider( # type: ignore
                     id="ma-window-slider-progress",
                     min=0,
                     max=len(ma_windows) - 1,
@@ -907,16 +921,16 @@ app.layout = html.Div([
      Output('upload-callback-output', 'figure', allow_duplicate=True),
      Output('loading-state-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
-    Input('upload-original-progress', 'contents'),
-    [State('upload-original-progress', 'filename'),
-     State('unsaved-changes-store', 'data')],
+    [Input('upload-original-progress', 'contents'),
+     Input('upload-original-progress', 'filename')],
+    [State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
 def store_original_data(contents, filename, unsaved_data):
     if not contents:
         return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
-    loading_data = {'loading': True, 'message': 'Feldolgozás: sync_progress.csv'}
+    loading_data = {'loading': True, 'message': 'Processing: sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -933,8 +947,12 @@ def store_original_data(contents, filename, unsaved_data):
         if not all(col in df.columns for col in required_cols):
             missing_cols = [col for col in required_cols if col not in df.columns]
             raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
-
-        store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        # Store absolute path if not already absolute (assume saved folder)
+        if not os.path.isabs(filename):
+            abs_path = os.path.join(SCRIPT_DIR, "measurements", "saved", filename)
+        else:
+            abs_path = filename
+        store_data = {'filename': abs_path, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
         feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
         
         # A newly uploaded file is considered "saved".
@@ -956,16 +974,16 @@ def store_original_data(contents, filename, unsaved_data):
      Output('upload-callback-output', 'figure', allow_duplicate=True),
      Output('loading-state-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
-    Input('upload-compare-progress', 'contents'),
-    [State('upload-compare-progress', 'filename'),
-     State('unsaved-changes-store', 'data')],
+    [Input('upload-compare-progress', 'contents'),
+     Input('upload-compare-progress', 'filename')],
+    [State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
 def store_compare_data(contents, filename, unsaved_data):
     if not contents:
         return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
-    loading_data = {'loading': True, 'message': 'Feldolgozás: összehasonlító sync_progress.csv'}
+    loading_data = {'loading': True, 'message': 'Processing: comparison sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -982,8 +1000,12 @@ def store_compare_data(contents, filename, unsaved_data):
         if not all(col in df.columns for col in required_cols):
             missing_cols = [col for col in required_cols if col not in df.columns]
             raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
-
-        store_data = {'filename': filename, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
+        # Store absolute path if not already absolute (assume saved folder)
+        if not os.path.isabs(filename):
+            abs_path = os.path.join(SCRIPT_DIR, "measurements", "saved", filename)
+        else:
+            abs_path = filename
+        store_data = {'filename': abs_path, 'data': df.to_json(date_format='iso', orient='split'), 'metadata': metadata}
         feedback = {'title': 'File Uploaded', 'body': f"Successfully loaded '{filename}'."}
         
         # A newly uploaded file is considered "saved".
@@ -1289,8 +1311,8 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
  
     def create_header_with_tooltip(text, metric_id, style=None):
         if metric_id in tooltip_texts:
-            info_icon = html.Span([
-                " ",
+            info_icon = html.Span([ # type: ignore
+                "\u00A0",  # Non-breaking space
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
                 id={'type': 'info-icon', 'metric': metric_id},
@@ -1596,9 +1618,9 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
 
             # --- Build Combined Header Table ---
             file_name_header_row = html.Tr([
-                html.Th(""), # Spacer for Block Height
-                html.Th(f"Original: {original_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal'}),
-                html.Th(f"Comparison: {compare_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal', **left_border_style})
+                html.Th(""),  # Spacer for Block Height
+                html.Th(f"Original: {original_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all'}),
+                html.Th(f"Comparison: {compare_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all', **left_border_style})
             ])
 
             comparison_headers = [
@@ -1712,7 +1734,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
             # --- Combine into a single container ---
             scrollable_div = html.Div(
                 [header_table, body_table],
-                style={'maxHeight': '500px', 'overflowY': 'auto'}
+                style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'}
             )
             table_children.append(scrollable_div)
 
@@ -1722,7 +1744,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
             df_orig_table = df_original_display[cols_to_show].rename(columns=col_names)
 
             # --- Title (Non-scrollable) ---
-            table_children.append(html.H6(f"Original: {original_filename}"))
+            table_children.append(html.H6(f"Original: {original_filename}", style={'wordBreak': 'break-all'}))
 
             # --- Define column widths and create Colgroup ---
             col_widths = ['25%', '20%', '35%', '20%']
@@ -1758,7 +1780,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
             # --- Combine into a single container ---
             scrollable_div = html.Div(
                 [header_table, body_table],
-                style={'maxHeight': '500px', 'overflowY': 'auto'}
+                style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'}
             )
             table_children.append(scrollable_div)
         elif compare_valid:
@@ -1766,7 +1788,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
             col_names = {'Block_height': 'Block Height', **data_col_names}
             df_comp_table = df_compare_display[cols_to_show].rename(columns=col_names)
 
-            table_children.append(html.H6(f"Comparison: {compare_filename}"))
+            table_children.append(html.H6(f"Comparison: {compare_filename}", style={'wordBreak': 'break-all'}))
             col_widths = ['25%', '20%', '35%', '20%']
             col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
             header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, col) for col in df_comp_table.columns]))]
@@ -1790,8 +1812,8 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     else:
                         row_data.append(html.Td(val))
                 body_rows.append(html.Tr(row_data))
-            body_table = dbc.Table([col_group, html.Tbody(body_rows)], striped=True, bordered=True, hover=True, style={'tableLayout': 'fixed', 'width': '100%', 'marginTop': '-1px'})
-            scrollable_div = html.Div([header_table, body_table], style={'maxHeight': '500px', 'overflowY': 'auto'})
+            body_table = dbc.Table([col_group, html.Tbody(body_rows)], striped=True, bordered=True, hover=True, style={'tableLayout': 'fixed', 'width': '100%', 'marginTop': '-1px'}) # type: ignore
+            scrollable_div = html.Div([header_table, body_table], style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'})
             table_children.append(scrollable_div)
         else:
             table_children = [html.P("No data to display in table.")]
@@ -2135,7 +2157,8 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True),
-     Output('save-callback-output', 'figure', allow_duplicate=True)],
+     Output('save-callback-output', 'figure', allow_duplicate=True),
+     Output('reset-upload-store', 'data', allow_duplicate=True)],
     [Input({'type': 'save-as-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input({'type': 'save-overwrite-button', 'prefix': dash.dependencies.ALL}, 'n_clicks')],
     [State('original-data-store', 'data'),
@@ -2146,7 +2169,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
      State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filter_range_values, start_block_vals, end_block_vals, unsaved_data):
+def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filter_range_values, start_block_vals, end_block_vals, unsaved_data): # type: ignore
     triggered_id = dash.callback_context.triggered_id
     if not triggered_id or not (any(n_clicks_as) or any(n_clicks_overwrite)):
         raise dash.exceptions.PreventUpdate
@@ -2179,6 +2202,8 @@ def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filte
     message = "An unknown error occurred."
     data_to_save = original_data if prefix == 'Original' else compare_data
 
+    upload_id_to_reset = None
+
     if data_to_save:
         # Create a copy to avoid modifying the state directly
         new_unsaved_data = unsaved_data.copy()
@@ -2189,8 +2214,9 @@ def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filte
         
         if 'Error' not in message:
             new_unsaved_data[prefix] = False
+            upload_id_to_reset = 'upload-original-progress' if prefix == 'Original' else 'upload-compare-progress'
 
-    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, {}
+    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, {}, upload_id_to_reset
 
 @app.callback(
     Output('theme-switch', 'value'),
@@ -2252,8 +2278,8 @@ def update_metadata_display(original_data, compare_data):
             if key in tooltip_texts:
                 # Make the ID unique by prefixing it with the card type (Original/Comparison)
                 unique_metric_id = f"{title_prefix}-{key}"
-                info_icon = html.Span([
-                    " ",
+                info_icon = html.Span([ # type: ignore
+                    "\u00A0",  # Non-breaking space
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                 ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 key_with_icon.append(info_icon)
@@ -2302,7 +2328,12 @@ def update_metadata_display(original_data, compare_data):
         # Add block selectors
         start_block_selector = dbc.ListGroupItem(
             [
-                html.Div(html.B("Start Block Height:")),
+                html.Div([
+                    html.B("Start Block Height:"),
+                    html.Span([ # type: ignore
+                        "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Start Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                ], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div(dcc.Dropdown(id={'type': 'start-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select start block"), style={'width': '50%'})
             ],
             className="d-flex justify-content-between align-items-center p-2"
@@ -2311,7 +2342,12 @@ def update_metadata_display(original_data, compare_data):
 
         end_block_selector = dbc.ListGroupItem(
             [
-                html.Div(html.B("End Block Height:")),
+                html.Div([
+                    html.B("End Block Height:"),
+                    html.Span([ # type: ignore
+                        "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-End Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                ], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div(dcc.Dropdown(id={'type': 'end-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select end block"), style={'width': '50%'})
             ],
             className="d-flex justify-content-between align-items-center p-2"
@@ -2321,8 +2357,14 @@ def update_metadata_display(original_data, compare_data):
         add_metadata_form = dbc.ListGroupItem([
             dbc.Row([
                 dbc.Col(dbc.Input(id={'type': 'metadata-key-input', 'prefix': title_prefix}, placeholder='New Property', type='text', size='sm'), width=4),
-                dbc.Col(dbc.Input(id={'type': 'metadata-value-input', 'prefix': title_prefix}, placeholder='Value', type='text', size='sm'), width=5),
-                dbc.Col(dbc.Button("Add", id={'type': 'add-metadata-button', 'prefix': title_prefix}, color="primary", size="sm", className="w-100"), width=3)
+                dbc.Col(dbc.Input(id={'type': 'metadata-value-input', 'prefix': title_prefix}, placeholder='Value', type='text', size='sm'), width=4),
+                dbc.Col(
+                    html.Div([
+                        dbc.Button("Add", id={'type': 'add-metadata-button', 'prefix': title_prefix}, color="primary", size="sm", className="w-100"),
+                        html.Span([ # type: ignore
+                            "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                        ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Add Metadata'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                    ], className="d-flex align-items-center"), width=4)
             ], align="center", className="g-2") # g-2 for gutter
         ], className="p-2")
 
@@ -2332,14 +2374,14 @@ def update_metadata_display(original_data, compare_data):
                 # Left side: View and Clear controls
                 dbc.Col([
                     dbc.Button("Reset View", id={'type': 'reset-view-button', 'prefix': title_prefix}, color="secondary", size="sm", className="me-2"),
-                    html.Span([
-                        " ",
+                    html.Span([ # type: ignore
+                        "\u00A0",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Reset View'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Clear CSV", id={'type': 'clear-csv-button', 'prefix': title_prefix}, color="warning", size="sm", className="me-2"),
-                    html.Span([
-                        " ",
+                    html.Span([ # type: ignore
+                        "\u00A0",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Clear CSV'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                 ], width="auto", className="d-flex align-items-center"),
@@ -2352,20 +2394,20 @@ def update_metadata_display(original_data, compare_data):
                         inline=True,
                         className="me-1 custom-checklist"
                     ),
-                    html.Span([
-                        " ",
+                    html.Span([ # type: ignore
+                        "\u00A0",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save Filtered Range'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Save", id={'type': 'save-overwrite-button', 'prefix': title_prefix}, size="sm", color="primary", className="me-1"),
-                    html.Span([
-                        " ",
+                    html.Span([ # type: ignore
+                        "\u00A0",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Save As...", id={'type': 'save-as-button', 'prefix': title_prefix}, size="sm", color="success", className="me-1"), # type: ignore
                     html.Span([
-                        " ",
+                        "\u00A0",  # Non-breaking space
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save As...'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                 ], width="auto", className="d-flex align-items-center justify-content-end")
@@ -2421,6 +2463,31 @@ def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
             return dash.no_update, compare_data, unsaved_data
 
     raise dash.exceptions.PreventUpdate
+
+app.clientside_callback(
+    """
+    function(upload_id) {
+        if (!upload_id) {
+            return window.dash_clientside.no_update;
+        }
+        // This is a bit of a hack to reset the dcc.Upload component.
+        // It finds the 'x' (remove) button inside the upload component and clicks it.
+        // This is more reliable than trying to set `contents` to null from the server.
+        const uploadElement = document.getElementById(upload_id);
+        if (uploadElement) {
+            // The actual clickable element is often a div or span inside the main component
+            const removeButton = uploadElement.querySelector('div > div > span');
+            if (removeButton) {
+                removeButton.click();
+            }
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output('reset-upload-store', 'data', allow_duplicate=True),
+    Input('reset-upload-store', 'data'),
+    prevent_initial_call=True
+)
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
 # --- Callbacks for saving HTML report ---
