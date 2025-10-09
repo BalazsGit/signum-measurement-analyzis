@@ -1499,7 +1499,7 @@ app.layout = html.Div([
         html.Div([dbc.Switch(
                 id='show-data-table-switch',
                 label="Show Raw Data Table",
-                value=False,
+                value=True,
             )], id='show-data-table-switch-container'),
         html.Div(id='raw-data-controls-container', children=[
             dcc.Checklist(
@@ -2411,6 +2411,8 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
                     "sortable": True, 
                     "filter": True, 
                     "minWidth": 150, 
+                    "wrapText": True,
+                    "autoHeight": True,
                     "cellRenderer": "agAnimateShowChangeCellRenderer"
                 },
                 dashGridOptions={"rowHeight": 50, "enableCellTextSelection": True, "ensureDomOrder": True, "suppressHeaderFocus": True},
@@ -2491,7 +2493,17 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
         df_display.rename(columns={'Block_height': 'Block Height'}, inplace=True)
 
         # Column Definitions for AG Grid
-        column_defs.append({"headerName": "Block Height", "field": "Block Height", "sortable": True, "filter": "agNumberColumnFilter", "pinned": "left", "lockPinned": True, "cellClass": "lock-pinned", "checkboxSelection": True, "headerCheckboxSelection": True})
+        column_defs.append({
+            "headerName": "Block Height",
+            "field": "Block Height",
+            "sortable": True,
+            "filter": "agNumberColumnFilter",
+            "pinned": "left",
+            "lockPinned": True,
+            "cellClass": "lock-pinned",
+            "width": 150,
+            "cellStyle": {'textAlign': 'center', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}
+        })
 
         orig_group_children = []
         comp_group_children = []
@@ -2501,16 +2513,21 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
             'Sync Speed [Blocks/sec]': {'higher_is_better': True}
         }
 
-        for internal_name, display_name in ALL_RAW_DATA_COLS.items():
+        for i, (internal_name, display_name) in enumerate(ALL_RAW_DATA_COLS.items()):
             orig_field = f"{display_name}_orig"
             comp_field = f"{display_name}_comp" # This is the field name in the merged dataframe
             is_hidden = internal_name not in selected_columns
 
             # Value formatters and cell styles
             value_formatter = None
-            if 'Timestamp' in display_name:
+            cell_style_orig = {}
+            cell_style_comp = {}
+            if 'Timestamp [Date]' in display_name:
                 # This JS function constructs the correct date column name (e.g., 'Block Timestamp_date_orig')
-                value_formatter_str = "params.value != null ? `${d3.format(',')(params.value)}<br><small>[${params.data[params.colDef.field.replace(' [s]', '_date')]}]</small>` : ''"
+                value_formatter_str = "params.value"
+            elif 'Timestamp [s]' in display_name:
+                # This JS function constructs the correct date column name (e.g., 'Block Timestamp_date_orig')
+                value_formatter_str = "params.value != null ? d3.format(',')(params.value) : ''"
             elif 'Speed' in display_name or 'Time [s]' in display_name:
                 value_formatter_str = "params.value != null ? d3.format(',.2f')(params.value) : ''"
             else:
@@ -2518,9 +2535,6 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
             
             value_formatter = {"function": value_formatter_str}
             
-            cell_style_orig = {}
-            cell_style_comp = {}
-
             if display_name in numeric_metrics_info:
                 hib = numeric_metrics_info[display_name]['higher_is_better']
                 cell_style_orig = {"styleConditions": [
@@ -2550,6 +2564,13 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
             {"headerName": f"Original: {original_filename}", "children": orig_group_children},
             {"headerName": f"Comparison: {compare_filename}", "children": comp_group_children}
         ])
+
+        # Add a left border to the first visible column in the "Comparison" group
+        first_visible_comp_child = next((child for child in comp_group_children if not child.get("hide")), None)
+        if first_visible_comp_child:
+            border_style = {'borderLeft': '1px solid var(--ag-border-color, #babfc7)'}
+            # Merge with existing styles if any
+            first_visible_comp_child['cellStyle'] = {**first_visible_comp_child.get('cellStyle', {}), **border_style}
 
     elif original_valid:
         df_display = df_original_display[cols_for_processing].copy()
