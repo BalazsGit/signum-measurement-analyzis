@@ -7,7 +7,7 @@ def upgrade_dependencies():
     try:
         # Using a single call to pip is more efficient
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "dash-extensions", "numpy"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "dash-extensions", "numpy", "dash-ag-grid"],
             check=True, capture_output=True, text=True, timeout=300 # 5 minute timeout
         )
         print("Dependencies are up to date.")
@@ -38,6 +38,7 @@ import re
 import json
 import numpy as np
 
+import dash_ag_grid as dag
 # --- Monkey-patching for older Dash versions ---
 # This is a workaround for older Dash versions where 'loading_state' might not be
 # a registered property on all components, causing validation errors.
@@ -387,6 +388,14 @@ def format_seconds(seconds):
     if pd.isna(seconds):
         return "N/A"
     return str(timedelta(seconds=int(seconds)))
+
+ALL_RAW_DATA_COLS = {
+    'Block_timestamp_date': 'Block Timestamp [Date]',
+    'Block_timestamp': 'Block Timestamp [s]',
+    'Accumulated_sync_in_progress_time[s]': 'Sync Time [s]',
+    'SyncTime_Formatted': 'Sync Time [Formatted]',
+    'Blocks_per_Second': 'Sync Speed [Blocks/sec]',
+}
 
 # --- Tooltip Content ---
 tooltip_texts = {
@@ -1304,9 +1313,16 @@ def process_progress_df(df, filename=""):
     df['Blocks_per_Second'] = (delta_blocks / delta_time.replace(0, pd.NA)).fillna(0)
 
     if 'Block_timestamp' in df.columns:
-        df['Block_timestamp_date'] = df['Block_timestamp'].apply(
+        # Create the date columns with suffixes that match what the merge operation will produce,
+        # so the valueFormatter can find them in both single and comparison views.
+        # Ensure Block_timestamp is numeric before applying timedelta
+        df['Block_timestamp'] = pd.to_numeric(df['Block_timestamp'], errors='coerce')
+        # Drop rows where Block_timestamp became NaN after coercion
+        df.dropna(subset=['Block_timestamp'], inplace=True)
+        df['Block Timestamp_date_orig'] = df['Block_timestamp'].apply(
             lambda ts: (SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(ts))).strftime('%Y-%m-%d %H:%M:%S UTC') if pd.notna(ts) else ''
         )
+        df['Block_timestamp_date'] = df['Block Timestamp_date_orig'] # For single view compatibility
     return df
 
 # --- Moving Average Window Values ---
@@ -1483,12 +1499,13 @@ app.layout = html.Div([
         html.Div([dbc.Switch(
                 id='show-data-table-switch',
                 label="Show Raw Data Table",
-                value=True,
+                value=False,
             )], id='show-data-table-switch-container'),
         html.Div(id='raw-data-controls-container', children=[
             dcc.Checklist(
                 id='raw-data-column-checklist',
                 options=[
+                    {'label': ' Block Timestamp [Date]', 'value': 'Block_timestamp_date'},
                     {'label': ' Block Timestamp [s]', 'value': 'Block_timestamp'},
                     {'label': ' Sync Time [s]', 'value': 'Accumulated_sync_in_progress_time[s]'},
                     {'label': ' Sync Time [Formatted]', 'value': 'SyncTime_Formatted'},
@@ -1496,7 +1513,7 @@ app.layout = html.Div([
                 ],
                 value=['Block_timestamp', 'SyncTime_Formatted', 'Blocks_per_Second'], # Default visible columns
                 className="custom-checklist mt-2 mb-2"
-            )
+            ),
         ], style={'display': 'none'}), # Initially hidden
         html.Div(id='data-table-container'),
     ]),
@@ -1905,7 +1922,7 @@ def reload_compare_data(n_clicks, store_data):
     prevent_initial_call=True
 )
 def update_progress_graph_and_time(sort_state, window_index, original_data, compare_data, # type: ignore
-                                   start_block_vals, end_block_vals, reset_clicks, show_data_table,
+                                   start_block_vals, end_block_vals, reset_clicks, show_data_table, # type: ignore
                                    legend_clicks, legend_values, click_position, clear_cursor_clicks,
                                    selected_columns, theme, restyle_data, existing_figure):
     loading_message = {'loading': True, 'message': 'Processing data and generating graphs...'}
@@ -2134,6 +2151,7 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
 
     # --- Filter dataframes for display and metrics ---
     df_original_display = data_map['Original']['display_df']
+    print(df_original_display[['Block_timestamp', 'Block_timestamp_date', 'Block Timestamp_date_orig']].head(10))
     df_compare_display = data_map['Comparison']['display_df']
 
     # --- Plot Original Data ---
@@ -2371,302 +2389,37 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
         table_title_compare
     )
 
-    # --- Generate Raw Data Table ---
-    table_children = []
+    # --- Generate Raw Data Table using AG Grid for virtualization ---
+    table_component = None
     table_style = {'display': 'none'}
     controls_style = {'display': 'none'}
     if show_data_table:
         table_style = {'display': 'block'}
         controls_style = {'display': 'block'}
-        data_col_names = {
-            'Block_timestamp': 'Block Timestamp [s]',
-            'SyncTime_Formatted': 'Sync Time [Formatted]',
-            'Blocks_per_Second': 'Sync Speed [Blocks/sec]'
-        }
-        # Add 'Sync Time [s]' only if it's selected
-        if 'Accumulated_sync_in_progress_time[s]' in selected_columns:
-            data_col_names['Accumulated_sync_in_progress_time[s]'] = 'Sync Time [s]'
+        df_display, column_defs = create_raw_data_table_data(
+            df_original_display, df_compare_display, selected_columns,
+            original_filename, compare_filename, sort_state
+        )
 
-        present_display_names = {k: v for k, v in data_col_names.items() if k in selected_columns}
-
-        # Define columns for display vs. for processing
-        cols_to_show = ['Block_height'] + list(present_display_names.keys())
-        cols_for_processing = list(cols_to_show) # Start with visible columns
-
-        # Ensure 'Sync Time [s]' is included if 'Sync Time [Formatted]' is, for diff calculation
-        if 'SyncTime_Formatted' in cols_for_processing and 'Accumulated_sync_in_progress_time[s]' not in cols_for_processing:
-            cols_for_processing.append('Accumulated_sync_in_progress_time[s]')
-
-        # Check if dataframes have been processed and have the necessary columns
-        original_valid = not df_original_display.empty and all(c in df_original_display.columns for c in cols_for_processing)
-        compare_valid = not df_compare_display.empty and all(c in df_compare_display.columns for c in cols_for_processing)
-        
-        if original_valid and compare_valid:
-            # --- Merged Table Logic for Fixed Header ---
-            df_orig_subset = df_original_display[cols_to_show].rename(columns=data_col_names)
-            df_comp_subset = df_compare_display[cols_to_show].rename(columns=data_col_names) # type: ignore
-            df_merged = pd.merge(
-                df_orig_subset,
-                df_comp_subset,
-                on='Block_height',
-                how='outer',
-                suffixes=('_orig', '_comp')
-            ).sort_values(by='Block_height').reset_index(drop=True)
-            df_merged.rename(columns={'Block_height': 'Block Height'}, inplace=True)
-
-            # --- Build Header Table ---
-            left_border_style = {'borderLeft': '1px solid black'}
-            # Define column widths for synchronization. This ensures header and body columns align.
-            num_data_cols = len(present_display_names)
-            if num_data_cols > 0:
-                block_height_width = 16
-                data_col_width = (100 - block_height_width) / (num_data_cols * 2)
-                col_widths = [f'{block_height_width}%'] + [f'{data_col_width}%'] * num_data_cols * 2
-            else:
-                col_widths = ['100%']
-            col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
-
-            # --- Build Combined Header Table ---
-            file_name_header_row = html.Tr([
-                html.Th(""),  # Spacer for Block Height
-                html.Th(f"Original: {original_filename}", colSpan=len(present_display_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all'}),
-                html.Th(f"Comparison: {compare_filename}", colSpan=len(present_display_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all', **left_border_style})
-            ])
-
-            comparison_headers = [
-                create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp [s]' else col, f"{col}_comp", style=left_border_style if i == 0 else None)
-                for i, col in enumerate(present_display_names.values())
-            ]
-            column_name_header_row = html.Tr(
-                [create_header_with_tooltip("Block Height", "Block Height", "Block Height")] + # type: ignore
-                [create_header_with_tooltip(col, col, f"{col}_orig") for col in present_display_names.values()] +
-                comparison_headers
+        if not df_display.empty:
+            table_component = dag.AgGrid(
+                id="raw-data-grid",
+                rowData=df_display.to_dict("records"),
+                columnDefs=column_defs, # type: ignore
+                defaultColDef={
+                    "resizable": True, 
+                    "sortable": True, 
+                    "filter": True, 
+                    "minWidth": 150, 
+                    "cellRenderer": "agAnimateShowChangeCellRenderer"
+                },
+                dashGridOptions={"rowHeight": 50, "enableCellTextSelection": True, "ensureDomOrder": True, "suppressHeaderFocus": True},
+                columnSize="sizeToFit",
+                style={"width": "100%", "height": "500px"},
+                className="ag-theme-alpine-dark" if is_dark_theme else "ag-theme-alpine",
             )
-
-            header_table_children = [html.Thead([file_name_header_row, column_name_header_row])]
-            header_table_style = {
-                'tableLayout': 'fixed', 'width': '100%',
-                'position': 'sticky', 'top': 0, 'zIndex': 2, # type: ignore
-                'backgroundColor': 'var(--bs-body-bg, white)'
-            }
-            header_table = dbc.Table([col_group] + header_table_children, bordered=True, className="mb-0", style=header_table_style)
-            # --- Build Body Table ---
-            body_rows = []
-            for _, row in df_merged.iterrows():
-                row_data = [html.Td(f"{int(row['Block Height']):,}" if pd.notna(row['Block Height']) else "")]
-                
-                numeric_metrics_info = {
-                    'Sync Time [s]': {'higher_is_better': False},
-                    'Sync Speed [Blocks/sec]': {'higher_is_better': True}
-                }
-
-                # Add original columns' cells
-                for display_name in present_display_names.values():
-                    orig_val = row.get(f"{display_name}_orig")
-
-                    # Format the main value
-                    if pd.isna(orig_val):
-                        cell_content = [""]
-                    elif display_name == 'Block Timestamp [s]' and pd.notna(orig_val):
-                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(orig_val))
-                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
-                        cell_content = [f"{int(orig_val):,}", html.Br(), f"[{date_str}]"]
-                    elif display_name == 'Sync Time [s]' and pd.notna(orig_val):
-                        cell_content = [f"{orig_val:.3f}"]
-                    elif isinstance(orig_val, float):
-                        cell_content = [f"{orig_val:.2f}"]
-                    else:
-                        cell_content = [str(orig_val)]
-
-                    # Calculate and add the difference if it's a numeric metric
-                    if display_name in numeric_metrics_info:
-                        comp_val = row.get(f"{display_name}_comp")
-                        if pd.notna(orig_val) and pd.notna(comp_val):
-                            diff = orig_val - comp_val
-                            is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
-                            color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
-                            if color_class:
-                                if display_name == 'Sync Time [s]':
-                                    diff_str = f" ({diff:+.2f}s)"
-                                else:
-                                    diff_str = f" ({diff:+.2f})"
-                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold")) # type: ignore
-                    elif display_name == 'Sync Time [Formatted]':
-                        orig_s_val = row.get('Sync Time [s]_orig')
-                        comp_s_val = row.get('Sync Time [s]_comp')
-                        if pd.notna(orig_s_val) and pd.notna(comp_s_val):
-                            diff = orig_s_val - comp_s_val
-                            color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
-                            if color_class:
-                                sign = "+" if diff > 0 else "-"
-                                diff_str = f" ({sign}{format_seconds(abs(diff))})"
-                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold")) # type: ignore
-                    row_data.append(html.Td(cell_content))
-
-                # Add comparison columns' cells
-                for i, display_name in enumerate(present_display_names.values()):
-                    cell_style = {'borderLeft': '1px solid black'} if i == 0 else {}
-                    
-                    comp_val = row.get(f"{display_name}_comp")
-                    
-                    # Format the main value
-                    if pd.isna(comp_val):
-                        cell_content = [""]
-                    elif display_name == 'Block Timestamp [s]' and pd.notna(comp_val):
-                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(comp_val))
-                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
-                        cell_content = [f"{int(comp_val):,}", html.Br(), f"[{date_str}]"]
-                    elif display_name == 'Sync Time [s]' and pd.notna(comp_val):
-                        cell_content = [f"{comp_val:.3f}"]
-                    elif isinstance(comp_val, float):
-                        cell_content = [f"{comp_val:.2f}"]
-                    else:
-                        cell_content = [str(comp_val)]
-
-                    # Calculate and add the difference if it's a numeric metric
-                    if display_name in numeric_metrics_info:
-                        orig_val = row.get(f"{display_name}_orig")
-                        if pd.notna(orig_val) and pd.notna(comp_val):
-                            diff = comp_val - orig_val
-                            is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
-                            color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
-                            if color_class:
-                                if display_name == 'Sync Time [s]':
-                                    diff_str = f" ({diff:+.2f}s)"
-                                else:
-                                    diff_str = f" ({diff:+.2f})"
-                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold")) # type: ignore
-                    elif display_name == 'Sync Time [Formatted]':
-                        orig_s_val = row.get('Sync Time [s]_orig')
-                        comp_s_val = row.get('Sync Time [s]_comp')
-                        if pd.notna(orig_s_val) and pd.notna(comp_s_val):
-                            diff = comp_s_val - orig_s_val
-                            color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
-                            if color_class:
-                                sign = "+" if diff > 0 else "-"
-                                diff_str = f" ({sign}{format_seconds(abs(diff))})"
-                                cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold")) # type: ignore
-
-                    row_data.append(html.Td(cell_content, style=cell_style))
-
-                body_rows.append(html.Tr(row_data))
-
-            body_table = dbc.Table([col_group, html.Tbody(body_rows)], striped=True, bordered=True, hover=True, style={'tableLayout': 'fixed', 'width': '100%', 'marginTop': '-1px'})
-            
-            # --- Combine into a single container ---
-            scrollable_div = html.Div(
-                [header_table, body_table],
-                style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'}
-            )
-            table_children.append(scrollable_div)
-
-        elif original_valid:
-            # Single table
-            col_names = {'Block_height': 'Block Height', **present_display_names}
-            df_orig_table = df_original_display[cols_to_show].rename(columns=col_names)
-
-            # Apply sorting
-            sort_by_column = sort_state['column']
-            if sort_by_column in df_orig_table.columns:
-                ascending = sort_state['direction'] == 'asc'
-                df_orig_table.sort_values(by=sort_by_column, ascending=ascending, inplace=True, na_position='last')
-                df_orig_table.reset_index(drop=True, inplace=True)
-
-
-            # --- Title (Non-scrollable) ---
-            table_children.append(html.H6(f"Original: {original_filename}", style={'wordBreak': 'break-all'}))
-
-            # --- Define column widths and create Colgroup ---
-            num_data_cols = len(present_display_names)
-            if num_data_cols > 0:
-                col_widths = ['25%'] + [f'{75 / num_data_cols}%'] * num_data_cols
-            else:
-                col_widths = ['100%']
-            col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
-
-            # --- Header Table ---
-            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp [s]' else col, col) for col in df_orig_table.columns]))]
-            header_table_style = {
-                'tableLayout': 'fixed', 'width': '100%',
-                'position': 'sticky', 'top': 0, 'zIndex': 2, # type: ignore
-                'backgroundColor': 'var(--bs-body-bg, white)'
-            }
-            header_table = dbc.Table([col_group] + header_table_children, bordered=True, className="mb-0", style=header_table_style)
-
-            # --- Body Table ---
-            body_rows = []
-            for _, row in df_orig_table.iterrows():
-                row_data = []
-                for col in df_orig_table.columns:
-                    val = row.get(col)
-                    if pd.isna(val):
-                        row_data.append(html.Td(""))
-                    elif col == 'Block Timestamp [s]' and pd.notna(val):
-                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(val))
-                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
-                        row_data.append(html.Td([f"{int(val):,}", html.Br(), f"[{date_str}]"]))
-                    elif col == 'Sync Time [s]' and pd.notna(val):
-                        row_data.append(html.Td(f"{val:.3f}"))
-                    elif col == 'Block Height' and pd.notna(val):
-                        row_data.append(html.Td(f"{int(val):,}"))
-                    elif isinstance(val, float):
-                        row_data.append(html.Td(f"{val:.2f}"))
-                    else:
-                        row_data.append(html.Td(val))
-                body_rows.append(html.Tr(row_data))
-            
-            body_table = dbc.Table([col_group, html.Tbody(body_rows)], striped=True, bordered=True, hover=True, style={'tableLayout': 'fixed', 'width': '100%', 'marginTop': '-1px'})
-            
-            # --- Combine into a single container ---
-            scrollable_div = html.Div(
-                [header_table, body_table],
-                style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'}
-            )
-            table_children.append(scrollable_div)
-        elif compare_valid:
-            # Single table for comparison data
-            col_names = {'Block_height': 'Block Height', **present_display_names}
-            df_comp_table = df_compare_display[cols_to_show].rename(columns=col_names)
-
-            table_children.append(html.H6(f"Comparison: {compare_filename}", style={'wordBreak': 'break-all'}))
-            num_data_cols = len(present_display_names)
-            if num_data_cols > 0:
-                col_widths = ['25%'] + [f'{75 / num_data_cols}%'] * num_data_cols
-            else:
-                col_widths = ['100%']
-            col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
-            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp [s]' else col, col) for col in df_comp_table.columns]))]
-            header_table_style = {
-                'tableLayout': 'fixed', 'width': '100%',
-                'position': 'sticky', 'top': 0, 'zIndex': 2,
-                'backgroundColor': 'var(--bs-body-bg, white)'
-            }
-            header_table = dbc.Table([col_group] + header_table_children, bordered=True, className="mb-0", style=header_table_style)
-            body_rows = []
-            for _, row in df_comp_table.iterrows():
-                row_data = []
-                for col in df_comp_table.columns:
-                    val = row.get(col)
-                    if pd.isna(val):
-                        row_data.append(html.Td(""))
-                    elif col == 'Block Timestamp [s]' and pd.notna(val):
-                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(val))
-                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
-                        row_data.append(html.Td([f"{int(val):,}", html.Br(), f"[{date_str}]"]))
-                    elif col == 'Sync Time [s]' and pd.notna(val):
-                        row_data.append(html.Td(f"{val:.3f}"))
-                    elif col == 'Block Height' and pd.notna(val):
-                        row_data.append(html.Td(f"{int(val):,}"))
-                    elif isinstance(val, float):
-                        row_data.append(html.Td(f"{val:.2f}"))
-                    else:
-                        row_data.append(html.Td(val))
-                body_rows.append(html.Tr(row_data))
-            body_table = dbc.Table([col_group, html.Tbody(body_rows)], striped=True, bordered=True, hover=True, style={'tableLayout': 'fixed', 'width': '100%', 'marginTop': '-1px'}) # type: ignore
-            scrollable_div = html.Div([header_table, body_table], style={'maxHeight': '500px', 'overflowY': 'auto', 'width': '100%'})
-            table_children.append(scrollable_div)
         else:
-            table_children = [html.P("No data to display in table.")]
+            table_component = html.P("No data to display in table.")
 
     # Create custom legend
     custom_legend = create_custom_legend(fig, legend_values)
@@ -2683,7 +2436,7 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
     x_values_sorted = sorted(list(set(all_x_values)))
 
     # The clientside callback is now responsible for legend-value-store, so we return no_update for it here.
-    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style, custom_legend, controls_style, click_store_output, dash.no_update, x_values_sorted, clear_cursor_style
+    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_component, table_style, custom_legend, controls_style, click_store_output, dash.no_update, x_values_sorted, clear_cursor_style
 
 @app.callback(
     Output('click-position-store', 'data', allow_duplicate=True),
@@ -2695,26 +2448,188 @@ def store_click_data(clickData):
         return {'x': clickData['points'][0]['x']}
     return dash.no_update
 
+def create_raw_data_table_data(df_original_display, df_compare_display, selected_columns, original_filename, compare_filename, sort_state):
+    print("df_original_display columns:", df_original_display.columns.tolist())
+    """Prepares data and column definitions for the AG Grid raw data table.""" # type: ignore
+    data_col_names = {
+        'Block_timestamp_date': 'Block Timestamp [Date]',
+        'Block_timestamp': 'Block Timestamp [s]',
+        'Accumulated_sync_in_progress_time[s]': 'Sync Time [s]',
+        'SyncTime_Formatted': 'Sync Time [Formatted]',
+        'Blocks_per_Second': 'Sync Speed [Blocks/sec]',
+    }
+
+    # Create a dictionary of display names for the selected columns, maintaining the predefined order
+    present_display_names = {
+        col: data_col_names[col] for col in data_col_names
+        if col in selected_columns
+    }
+    
+    # Ensure 'Sync Time [s]' is included for diff calculations if 'Sync Time [Formatted]' is selected
+    cols_for_processing = ['Block_height'] + list(present_display_names.keys())
+    if 'SyncTime_Formatted' in cols_for_processing and 'Accumulated_sync_in_progress_time[s]' not in cols_for_processing:
+        cols_for_processing.append('Accumulated_sync_in_progress_time[s]')
+
+    if 'Block_timestamp' in cols_for_processing:
+        cols_for_processing.append('Block_timestamp_date') # Ensure the date column is available for processing
+
+    # The columns to actually select from the DataFrame for display
+    cols_to_select_from_df = ['Block_height'] + selected_columns
+
+    original_valid = not df_original_display.empty and all(c in df_original_display.columns for c in cols_for_processing)
+    compare_valid = not df_compare_display.empty and all(c in df_compare_display.columns for c in cols_for_processing)
+
+    df_display = pd.DataFrame()
+    column_defs = []
+
+    if original_valid and compare_valid:
+        df_orig_subset = df_original_display[cols_for_processing].rename(columns=ALL_RAW_DATA_COLS)
+        df_comp_subset = df_compare_display[cols_for_processing].rename(columns=ALL_RAW_DATA_COLS)
+        df_display = pd.merge(df_orig_subset, df_comp_subset, on='Block_height', how='outer', suffixes=('_orig', '_comp'))
+        # Ensure the date columns are explicitly present after merge, if they were selected
+        # The suffixes already handle the distinction.
+        df_display.rename(columns={'Block_height': 'Block Height'}, inplace=True)
+
+        # Column Definitions for AG Grid
+        column_defs.append({"headerName": "Block Height", "field": "Block Height", "sortable": True, "filter": "agNumberColumnFilter", "pinned": "left", "lockPinned": True, "cellClass": "lock-pinned", "checkboxSelection": True, "headerCheckboxSelection": True})
+
+        orig_group_children = []
+        comp_group_children = []
+
+        numeric_metrics_info = {
+            'Sync Time [s]': {'higher_is_better': False},
+            'Sync Speed [Blocks/sec]': {'higher_is_better': True}
+        }
+
+        for internal_name, display_name in ALL_RAW_DATA_COLS.items():
+            orig_field = f"{display_name}_orig"
+            comp_field = f"{display_name}_comp" # This is the field name in the merged dataframe
+            is_hidden = internal_name not in selected_columns
+
+            # Value formatters and cell styles
+            value_formatter = None
+            if 'Timestamp' in display_name:
+                # This JS function constructs the correct date column name (e.g., 'Block Timestamp_date_orig')
+                value_formatter_str = "params.value != null ? `${d3.format(',')(params.value)}<br><small>[${params.data[params.colDef.field.replace(' [s]', '_date')]}]</small>` : ''"
+            elif 'Speed' in display_name or 'Time [s]' in display_name:
+                value_formatter_str = "params.value != null ? d3.format(',.2f')(params.value) : ''"
+            else:
+                value_formatter_str = "params.value"
+            
+            value_formatter = {"function": value_formatter_str}
+            
+            cell_style_orig = {}
+            cell_style_comp = {}
+
+            if display_name in numeric_metrics_info:
+                hib = numeric_metrics_info[display_name]['higher_is_better']
+                cell_style_orig = {"styleConditions": [
+                    {"condition": f"params.data['{orig_field}'] > params.data['{comp_field}']", "style": {"color": "green" if hib else "red"}},
+                    {"condition": f"params.data['{orig_field}'] < params.data['{comp_field}']", "style": {"color": "red" if hib else "green"}}
+                ]}
+                cell_style_comp = {"styleConditions": [
+                    {"condition": f"params.data['{comp_field}'] > params.data['{orig_field}']", "style": {"color": "green" if hib else "red"}}, # Green if comparison is better
+                    {"condition": f"params.data['{comp_field}'] < params.data['{orig_field}']", "style": {"color": "red" if hib else "green"}} # Red if comparison is worse
+                ]}
+
+            # Only add to column_defs if it's not the internal 'Block_timestamp_date' field
+            if display_name == 'Block Timestamp_date':
+                # This is an internal column, not meant to be a header itself
+                # It's used by the valueFormatter of 'Block Timestamp [s]'
+                continue
+
+            # For timestamp columns, use agHTMLCellRenderer
+            if 'Timestamp' in display_name or 'Sync Time [Formatted]' in display_name:
+                orig_group_children.append({"headerName": display_name, "field": orig_field, "valueFormatter": value_formatter, "cellRenderer": "agHTMLCellRenderer", "cellStyle": cell_style_orig, "hide": is_hidden})
+                comp_group_children.append({"headerName": display_name, "field": comp_field, "valueFormatter": value_formatter, "cellRenderer": "agHTMLCellRenderer", "cellStyle": cell_style_comp, "hide": is_hidden})
+            else:
+                orig_group_children.append({"headerName": display_name, "field": orig_field, "valueFormatter": value_formatter, "cellStyle": cell_style_orig, "hide": is_hidden})
+                comp_group_children.append({"headerName": display_name, "field": comp_field, "valueFormatter": value_formatter, "cellStyle": cell_style_comp, "hide": is_hidden})
+
+        column_defs.extend([
+            {"headerName": f"Original: {original_filename}", "children": orig_group_children},
+            {"headerName": f"Comparison: {compare_filename}", "children": comp_group_children}
+        ])
+
+    elif original_valid:
+        df_display = df_original_display[cols_for_processing].copy()
+        # Rename columns for display in the grid
+        df_display.rename(columns={'Block_height': 'Block Height'}, inplace=True)
+        # Apply display names from data_col_names where applicable
+        for original_col, display_col in ALL_RAW_DATA_COLS.items():
+            if original_col in df_display.columns and original_col != display_col:
+                df_display.rename(columns={original_col: display_col}, inplace=True)
+
+        # Now build column_defs based on the renamed df_display columns
+        for col_name in df_display.columns:
+            col_def = {"headerName": col_name, "field": col_name}
+            if "Block Timestamp [s]" == col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',')(params.value) : ''"}
+            elif "Sync Time [Formatted]" == col_name:
+                col_def["cellRenderer"] = "agHTMLCellRenderer"
+                col_def["valueFormatter"] = {"function": "params.value != null ? `${params.value}` : ''"}
+            elif "Speed" in col_name or "Time [s]" in col_name or "Time [ms]" in col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',.2f')(params.value) : ''"}
+            elif "Block Height" == col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',')(params.value) : ''"}
+            
+            internal_name = next((k for k, v in ALL_RAW_DATA_COLS.items() if v == col_name), col_name)
+            col_def["hide"] = internal_name not in selected_columns and col_name != 'Block Height'
+            column_defs.append(col_def)
+
+    elif compare_valid:
+        df_display = df_compare_display[cols_for_processing].copy()
+        # Rename columns for display in the grid
+        df_display.rename(columns={'Block_height': 'Block Height'}, inplace=True)
+        # Apply display names from data_col_names where applicable
+        for original_col, display_col in ALL_RAW_DATA_COLS.items():
+            if original_col in df_display.columns and original_col != display_col:
+                df_display.rename(columns={original_col: display_col}, inplace=True)
+
+        # Now build column_defs based on the renamed df_display columns
+        for col_name in df_display.columns:
+            col_def = {"headerName": col_name, "field": col_name}
+            if "Block Timestamp [s]" == col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',')(params.value) : ''"}
+            elif "Sync Time [Formatted]" == col_name:
+                col_def["cellRenderer"] = "agHTMLCellRenderer"
+                col_def["valueFormatter"] = {"function": "params.value != null ? `${params.value}` : ''"}
+            elif "Speed" in col_name or "Time [s]" in col_name or "Time [ms]" in col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',.2f')(params.value) : ''"}
+            elif "Block Height" == col_name:
+                col_def["valueFormatter"] = {"function": "params.value != null ? d3.format(',')(params.value) : ''"}
+            
+            internal_name = next((k for k, v in ALL_RAW_DATA_COLS.items() if v == col_name), col_name)
+            col_def["hide"] = internal_name not in selected_columns and col_name != 'Block Height'
+            column_defs.append(col_def)
+
+    # Apply sorting
+    if not df_display.empty and sort_state['column'] in df_display.columns:
+        ascending = sort_state['direction'] == 'asc'
+        df_display.sort_values(by=sort_state['column'], ascending=ascending, inplace=True, na_position='last')
+
+    return df_display, column_defs
+
 @app.callback(
-    Output('sort-state-store', 'data'),
+    Output('sort-state-store', 'data', allow_duplicate=True),
     Input({'type': 'sort-button', 'column': dash.dependencies.ALL}, 'n_clicks'),
     State('sort-state-store', 'data'),
     prevent_initial_call=True
 )
 def update_sort_state(n_clicks, current_sort):
     ctx = dash.callback_context
-    if not ctx.triggered or not any(n > 0 for n in n_clicks if n is not None):
+    if not ctx.triggered or not any(n is not None and n > 0 for n in n_clicks):
         raise dash.exceptions.PreventUpdate
 
     triggered_id = ctx.triggered_id
+    if not isinstance(triggered_id, dict):
+        raise dash.exceptions.PreventUpdate
     column_id = triggered_id['column']
 
     if current_sort['column'] == column_id:
-        # Toggle direction
         new_direction = 'desc' if current_sort['direction'] == 'asc' else 'asc'
         return {'column': column_id, 'direction': new_direction}
     else:
-        # New column, sort ascending
         return {'column': column_id, 'direction': 'asc'}
 
 # Clientside callback to update legend values on hover
@@ -2754,41 +2669,41 @@ app.clientside_callback(
     prevent_initial_call=True
 )
 
-# This server-side callback is triggered by the store above and performs the logic.
+# This server-side callback is triggered by the store above and performs the logic for keyboard navigation.
 @app.callback(
     Output('click-position-store', 'data', allow_duplicate=True),
     Input('keyboard-event-store', 'data'),
     [State('click-position-store', 'data'), State('x-values-store', 'data')],
     prevent_initial_call=True
 )
-def move_cursor_with_keyboard(key_data, stored_cursor_pos, all_x_values):
-    # Ensure stored_cursor_pos is not None
-    if not stored_cursor_pos:
-        stored_cursor_pos = {}
-
-    if not key_data or not all_x_values or stored_cursor_pos is None or stored_cursor_pos.get('x') is None:
+def move_cursor_with_keyboard(key_data, current_cursor_pos, all_x_values):
+    if not key_data or not all_x_values or not current_cursor_pos or 'x' not in current_cursor_pos:
         raise dash.exceptions.PreventUpdate
 
     key = key_data.get('key')
     if key not in ['ArrowLeft', 'ArrowRight']:
         raise dash.exceptions.PreventUpdate
-        
-        current_x = stored_cursor_pos.get('x')    
+
+    current_x = current_cursor_pos.get('x')
     x_values_np = np.array(all_x_values)
     next_x = None
-    print(f"Current cursor x-position: {current_x}")
 
     if key == 'ArrowLeft':
+        # Find all x-values less than the current position
         prev_values = x_values_np[x_values_np < current_x]
         if prev_values.size > 0:
+            # The new position is the largest of the previous values
             next_x = prev_values[-1]
     else:  # ArrowRight
+        # Find all x-values greater than the current position
         next_values = x_values_np[x_values_np > current_x]
         if next_values.size > 0:
+            # The new position is the smallest of the next values
             next_x = next_values[0]
 
     if next_x is not None:
-        return {'x': float(next_x)} # Ensure it's a standard float, not numpy float
+        # Return a standard float, not a numpy float
+        return {'x': float(next_x)}
 
     raise dash.exceptions.PreventUpdate
 
