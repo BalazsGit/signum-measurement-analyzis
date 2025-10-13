@@ -63,6 +63,296 @@ except Exception as e:
 # Use the real path to resolve any symlinks and get the directory of the script
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
+# --- JavaScript for Report Generation ---
+REPORT_GENERATOR_JS = """
+window.dash_clientside = window.dash_clientside || {};
+window.dash_clientside.clientside = window.dash_clientside.clientside || {};
+
+window.dash_clientside.clientside.reset_upload_component = function(upload_id) {
+    if (!upload_id) {
+        return window.dash_clientside.no_update;
+    }
+    // This is a bit of a hack to reset the dcc.Upload component.
+    // It finds the 'x' (remove) button inside the upload component and clicks it.
+    // This is more reliable than trying to set `contents` to null from the server.
+    const uploadElement = document.getElementById(upload_id);
+    if (uploadElement) {
+        // The actual clickable element is often a div or span inside the main component
+        const removeButton = uploadElement.querySelector('div > div > span');
+        if (removeButton) {
+            removeButton.click();
+        }
+    }
+    return window.dash_clientside.no_update;
+};
+window.dash_clientside.clientside.report_generator = async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure_speed, distribution_figure_time_delta) {
+    if (!n_clicks) {
+        // This is the initial call or a callback update where the button wasn't clicked.
+        return window.dash_clientside.no_update;
+    }
+
+    try {
+        const rootElement = document.documentElement;
+        if (!rootElement) {
+            return 'CLIENTSIDE_ERROR: root element (html) not found.';
+        }
+        // Clone the container to avoid modifying the live DOM
+        const clone = rootElement.cloneNode(true);
+
+        const isDarkTheme = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        // --- Replace interactive elements with static text ---
+
+        // 1. Dropdowns
+        clone.querySelectorAll('div[id*="start-block-dropdown"], div[id*="end-block-dropdown"]').forEach(clonedDropdown => {
+            const originalDropdown = document.getElementById(clonedDropdown.id);
+            const wrapper = clonedDropdown.parentElement;
+            if (originalDropdown && wrapper && wrapper.parentElement) {
+                const originalDropdownValue = originalDropdown.querySelector('.Select-value-label, .Select__single-value');
+                const valueText = originalDropdownValue ? originalDropdownValue.textContent : 'N/A';
+                const staticEl = document.createElement('div');
+                staticEl.textContent = valueText;
+                staticEl.className = 'text-end';
+                staticEl.style.width = '50%';
+                staticEl.style.fontSize = '0.875em';
+                staticEl.style.color = 'var(--bs-body-color)';
+                wrapper.parentElement.replaceChild(staticEl, wrapper);
+            }
+        });
+
+        // 2. Metadata Inputs
+        clone.querySelectorAll('input[id*="metadata-input"]').forEach(input => {
+            if (input.parentElement) {
+                const valueText = input.value || 'N/A';
+                const staticEl = document.createElement('div');
+                staticEl.textContent = valueText;
+                staticEl.className = 'text-end text-muted';
+                staticEl.style.fontSize = '0.875em';
+                input.parentElement.replaceChild(staticEl, input);
+            }
+        });
+
+        // 3. Slider
+        const ma_windows = [10, 100, 200, 300, 400, 500];
+        const window_size = ma_windows[ma_slider_value_index];
+        const maSliderContainer = clone.querySelector('#ma-slider-container');
+        if (maSliderContainer) {
+            const staticEl = document.createElement('div');
+            staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
+            staticEl.className = 'mt-3'; // Add some margin
+            staticEl.style.fontWeight = 'bold';
+            maSliderContainer.parentNode.replaceChild(staticEl, maSliderContainer);
+        }
+        const dist_bins_values = [10, 100, 200, 300, 400, 500];
+        const dist_bins_size = dist_bins_values[dist_slider_value_index];
+        const distSliderContainer = clone.querySelector('#distribution-bins-slider-container');
+        if (distSliderContainer) {
+            const staticEl = document.createElement('div');
+            staticEl.textContent = `Distribution Bins: ${dist_bins_size}`;
+            staticEl.className = 'mt-3';
+            staticEl.style.fontWeight = 'bold';
+            distSliderContainer.parentNode.replaceChild(staticEl, distSliderContainer);
+        }
+
+        // --- Remove all interactive/unnecessary elements ---
+        const selectorsToRemove = [
+            // General UI controls
+            '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
+            '#show-data-table-switch-container', '#original-upload-container', '#compare-upload-container', 'span[id*="info-icon"]',
+            'script', '#loading-overlay',
+            '#_dash-dev-tools-ui-container', // Dash Dev Tools main container
+            // Dash developer/debug panels and error overlays (Dash 3.x)
+            '#_dash-debug-menu',
+            '.dash-debug-menu',
+            '.dash-debug-menu__button',
+            '.dash-debug-menu__title',
+            '.dash-debug-menu__version',
+            '.dash-debug-menu__server',
+            '.dash-debug-menu__status',
+            '.dash-debug-menu__icon',
+            '.dash-debug-menu__indicator',
+            '.dash-debug-menu__status--success',
+            '.dash-debug-menu__status--error',
+            '.bi-arrow-bar-left',
+            '.bi-arrow-left',
+            '.bi-arrow-return-left',
+            '.dash-error-message',
+            '.dash-fe-error__title',
+            '.dash-fe-error__message',
+            '.dash-fe-error__stack',
+            '.dash-dev-tools-menu',
+            '.dash-dev-tools-menu__button',
+            '.dash-dev-tools-menu__title',
+            '.dash-dev-tools-menu__version',
+            '.dash-dev-tools-menu__server',
+            // Reload and discard buttons
+            '#reload-original-button', '#reload-compare-button',
+            '#discard-original-button', '#discard-compare-button',
+            // Individual metadata controls
+            'span[id*="delete-metadata-button"]',
+            'span[id*="unsaved-changes-badge"]'
+        ];
+        // Remove any undefined or empty selectors to avoid JS errors
+        const validSelectorsToRemove = selectorsToRemove.filter(s => typeof s === 'string' && s.length > 0);
+        const extraArrowSelectors = [
+            '.dash-debug-menu__outer'
+            ,'.dash-debug-menu__outer--expanded'
+            ,'.dash-debug-menu__toggle'
+            ,'.dash-debug-menu__toggle--expanded'
+        ];
+        const allSelectorsToRemove = validSelectorsToRemove.concat(extraArrowSelectors);
+        clone.querySelectorAll(allSelectorsToRemove.join(', ')).forEach(el => el.remove());
+
+        // --- Remove entire rows for certain controls ---
+        const rowSelectorsToRemove = [
+            'button[id*="add-metadata-button"]', // The "Add" button and its row
+            'button[id*="reset-view-button"]', // The entire bar with Reset, Clear, and Save buttons
+            'button[id*="save-overwrite-button"]'
+        ];
+        clone.querySelectorAll(rowSelectorsToRemove.join(', ')).forEach(el => {
+            const parentRow = el.closest('.list-group-item');
+            if (parentRow) parentRow.remove();
+        });
+
+        // --- Convert all Plotly graphs to static images ---
+        const graphsToConvert = [
+            { id: 'progress-graph', figure: progress_figure },
+            { id: 'blockheight-vs-speed-graph', figure: blockheight_figure },
+            { id: 'distribution-graph-speed', figure: distribution_figure_speed }, // Use the correct argument name
+            { id: 'distribution-graph-time-delta', figure: distribution_figure_time_delta } // Use the correct argument name
+        ];
+
+        for (const graphInfo of graphsToConvert) {
+            const graphDiv = clone.querySelector(`#${graphInfo.id}`);
+            const originalGraphDiv = document.getElementById(graphInfo.id);
+
+            if (graphDiv && originalGraphDiv && window.Plotly && graphInfo.figure) {
+                const tempDiv = document.createElement('div');
+                // Position it off-screen
+                tempDiv.style.position = 'absolute';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
+                tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
+                document.body.appendChild(tempDiv);
+
+                try {
+                    // Deep copy the figure object for this iteration to prevent race conditions.
+                    // This ensures that modifications to layout for one graph don't affect
+                    // the rendering of another graph that might be processing asynchronously.
+                    const figureCopy = JSON.parse(JSON.stringify(graphInfo.figure));
+                    const data = figureCopy.data;
+                    const layout = figureCopy.layout;
+
+                    if (isDarkTheme) {
+                        layout.paper_bgcolor = '#222529'; // Darkly theme background
+                        layout.plot_bgcolor = '#222529';
+                    }
+
+                    // Increase font sizes for better readability in the saved image
+                    const fontSizeIncrease = 6; // Increase font size by 6 points
+
+                    if (layout.title) { // Ensure title object exists
+                        layout.title = (typeof layout.title === 'string') ? { text: layout.title } : layout.title;
+                    } else {
+                        layout.title = {};
+                    }
+                    layout.title.font = layout.title.font || {};
+                    layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
+                    ['xaxis', 'yaxis', 'xaxis2', 'yaxis2'].forEach(axis => {
+                        if (layout[axis]) {
+                            layout[axis].title = layout[axis].title || {};
+                            layout[axis].title.font = layout[axis].title.font || {};
+                            layout[axis].title.font.size = (layout[axis].title.font.size || 12) + fontSizeIncrease + 2;
+                            layout[axis].tickfont = layout[axis].tickfont || {};
+                            layout[axis].tickfont.size = (layout[axis].tickfont.size || 12) + fontSizeIncrease;
+                        }
+                    });
+                    // Handle single or multiple legends
+                    const legends = ['legend', 'legend1', 'legend2'];
+                    for (const legendName of legends) {
+                        if (layout[legendName]) {
+                            layout[legendName].font = layout[legendName].font || {};
+                                layout[legendName].font.size = (layout[legendName].font.size || 10) + fontSizeIncrease;
+                        }
+                    }
+
+                    await window.Plotly.newPlot(tempDiv, data, layout, {displayModeBar: false});
+
+                    const dataUrl = await window.Plotly.toImage(tempDiv, {
+                        format: 'png',
+                        height: originalGraphDiv.offsetHeight * 1.5,
+                        width: originalGraphDiv.offsetWidth * 1.5,
+                        scale: 2
+                    });
+
+                    const img = document.createElement('img');
+                    img.src = dataUrl;
+                    img.style.width = '100%';
+                    img.style.height = 'auto';
+                    graphDiv.parentNode.replaceChild(img, graphDiv);
+                } catch (e) {
+                    console.error(`Plotly.toImage failed for ${graphInfo.id}:`, e);
+                    const p = document.createElement('p');
+                    p.innerText = '[Error converting chart to image]';
+                    p.style.color = 'red';
+                    graphDiv.parentNode.replaceChild(p, graphDiv);
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+            } else if (graphDiv && graphDiv.parentNode) {
+                const p = document.createElement('p');
+                p.innerText = '[Chart not included in this report version.]';
+                graphDiv.parentNode.replaceChild(p, graphDiv);
+            }
+        }
+
+        // --- Fetch and embed CSS ---
+        let cssText = '';
+        const styleSheets = Array.from(document.styleSheets);
+        const cssPromises = styleSheets.map(sheet => {
+            try {
+                // For external stylesheets, fetch the content
+                if (sheet.href) {
+                    return fetch(sheet.href)
+                        .then(response => response.ok ? response.text() : '')
+                        .catch(() => '');
+                } else if (sheet.cssRules) {
+                    return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
+                }
+            } catch (e) {
+                // Silently fail on security errors for cross-origin stylesheets
+            }
+            return undefined; // Return undefined for sheets that can't be processed
+        }).filter(p => p); // Filter out undefined promises
+
+        const cssContents = await Promise.all(cssPromises);
+        cssText = cssContents.join('\\n'); // Use '\\n' for JS newlines
+
+        // --- Escape backticks and other problematic characters ---
+        const cleanCssText = cssText.replace(/`/g, '\\`');
+
+        // Construct the full HTML document
+        const fullHtml = `
+            <!DOCTYPE html>
+            <html lang="en" data-bs-theme="${isDarkTheme ? 'dark' : 'light'}"><head><meta charset="utf-8"><title>Sync Progress Report</title><style>${cleanCssText}</style></head>
+            <body>${clone.querySelector('body').innerHTML}</body>
+            </html>
+        `;
+        console.log("Returning fullHtml:", typeof fullHtml, fullHtml ? fullHtml.length : 0);
+        return { content: fullHtml };
+    } catch (e) {
+            console.error("⚠️ CLIENTSIDE CALLBACK ERROR:", e);
+            alert('Caught an error in callback: ' + e.message);
+            return { content: 'CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack };
+    }
+}
+
+window.dash_clientside.clientside.clientside_script_loaded = function() {
+    console.log("Clientside script loaded successfully.");
+    return true;
+}
+"""
+
 # --- CSS and Asset Management ---
 CUSTOM_CSS = """
 /*
@@ -243,6 +533,12 @@ def setup_directories():
     assets_dir = os.path.join(SCRIPT_DIR, "assets")
     if not os.path.isdir(assets_dir):
         os.makedirs(assets_dir)
+
+    # Write/update the report generator JS file
+    with open(os.path.join(assets_dir, "report_generator.js"), "w", encoding="utf-8") as f:
+        f.write(REPORT_GENERATOR_JS)
+
+    # Write/update the custom CSS file
     with open(os.path.join(assets_dir, "custom_styles.css"), "w", encoding="utf-8") as f:
         f.write(CUSTOM_CSS)
 
@@ -484,6 +780,23 @@ tooltip_texts = {
     'Distribution Bins': {
         'title': 'Distribution Bins',
         'body': "This slider controls the number of bins (columns) used to create the histograms in the distribution chart. A smaller number of bins provides a more general overview of the data distribution, while a larger number reveals more detail but can also appear more noisy. Adjust this to find the best representation for your data."
+    }
+,
+    'progress-graph-title': {
+        'title': 'Block Height and Sync Speed vs. Sync Time',
+        'body': "This chart visualizes the synchronization progress over time.\n\n- The primary Y-axis (left, blue) shows the 'Block Height' of the node, which should increase over time as it syncs.\n- The secondary Y-axis (right, orange/magenta) shows the 'Sync Speed' in Blocks per Second. This includes both the instantaneous speed (dotted line) and a moving average (solid line) to show the trend.\n- The X-axis represents the 'Accumulated Sync in Progress Time' in seconds. This timer is only active when the node is significantly behind the network, providing an accurate measure of the time spent catching up.\n\nThis view is useful for understanding the overall duration of the sync process and identifying how performance changes over time."
+    },
+    'blockheight-vs-speed-graph-title': {
+        'title': 'Sync Time and Sync Speed vs. Block Height',
+        'body': "This chart shows how synchronization time and speed evolve as the node progresses through different block heights.\n\n- The primary Y-axis (left, blue) shows the 'Accumulated Sync in Progress Time' in seconds.\n- The secondary Y-axis (right, orange/magenta) shows the 'Sync Speed' in Blocks per Second, including both instantaneous and moving average values.\n- The X-axis represents the 'Block Height'.\n\nThis view is particularly useful for identifying performance bottlenecks at specific block ranges. For example, a steep increase in sync time or a sharp drop in sync speed at a certain height might indicate a period of blocks with many complex transactions that are computationally expensive to verify."
+    },
+    'distribution-graph-speed-title': {
+        'title': 'Sync Speed Distribution',
+        'body': "This histogram and Kernel Density Estimate (KDE) plot shows the distribution of the instantaneous 'Blocks per Second' sync speed samples.\n\n- The histogram (bars) groups the speed samples into bins, showing the frequency of different performance levels.\n- The KDE curve (line) provides a smoothed estimate of the probability density function of the sync speed.\n\nA distribution skewed to the right (positive skew) indicates that the sync speed is often high, with occasional slower periods. A distribution skewed to the left (negative skew) would suggest consistently high speeds with rare, significant drops. A bell-shaped curve indicates that performance is centered around the average with predictable variations."
+    },
+    'distribution-graph-time-delta-title': {
+        'title': 'Sync Time Delta Distribution',
+        'body': "This histogram and Kernel Density Estimate (KDE) plot shows the distribution of the time elapsed between consecutive data samples (time delta).\n\n- This chart helps to understand the consistency of the data sampling interval. In an ideal scenario with a constant block processing rate, the time deltas would be tightly clustered around a single value.\n- A wide distribution or multiple peaks can indicate network latency, variable peer performance, or fluctuations in the node's processing load, causing delays between block receptions."
     }
 }
 
@@ -804,7 +1117,8 @@ app.layout = html.Div([
     dcc.Store(id='action-feedback-store'), # For modal feedback
     dcc.Store(id='unsaved-changes-store', data={'Original': False, 'Comparison': False}),
     dcc.Store(id='reset-upload-store'), # To trigger clientside upload reset
-    dcc.Store(id='html-content-store'), # For saving HTML content
+    dcc.Store(id='html-content-store'), # For saving HTML content from clientside callback
+    dcc.Store(id='clientside-script-store'), # To confirm clientside script is loaded
         dbc.Row([
         dbc.Col(html.H1("Sync Progress Reports", className="mt-3 mb-4"), width="auto", className="me-auto"),
         dbc.Col([
@@ -860,14 +1174,19 @@ app.layout = html.Div([
         ]),
     ]),
     html.Div([
-        dcc.Graph(id="progress-graph", className="my-4"),
-        dcc.Graph(id="blockheight-vs-speed-graph", className="my-4"),
+        html.Div(id="progress-graph-title", className="mt-4"),
+        dcc.Graph(id="progress-graph"),
+        html.Div(id="blockheight-vs-speed-graph-title", className="mt-4"),
+        dcc.Graph(id="blockheight-vs-speed-graph"),
         html.Div([
             html.Label("Moving Average Window:", className="me-2"),
             html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
             html.Div(dcc.Slider(id="ma-window-slider", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
-        ], id="ma-slider-container", style={'display': 'flex', 'alignItems': 'flex-start', 'marginTop': '20px'}),
-        dcc.Graph(id="distribution-graph", className="my-4"),
+        ], id="ma-slider-container", style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}),
+        html.Div(id="distribution-graph-speed-title", className="mt-4"),
+        dcc.Graph(id="distribution-graph-speed"),
+        html.Div(id="distribution-graph-time-delta-title", className="mt-4"),
+        dcc.Graph(id="distribution-graph-time-delta"),
         html.Div([
             html.Label("Distribution Bins:", className="me-2"),
             html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
@@ -1259,7 +1578,12 @@ def reload_compare_data(n_clicks, store_data):
 @app.callback(
     [Output("progress-graph", "figure"),
      Output("blockheight-vs-speed-graph", "figure"),
-     Output("distribution-graph", "figure"),
+     Output("distribution-graph-speed", "figure"), # type: ignore
+     Output("distribution-graph-time-delta", "figure"),
+     Output("progress-graph-title", "children"),
+     Output("blockheight-vs-speed-graph-title", "children"),
+     Output("distribution-graph-speed-title", "children"),
+     Output("distribution-graph-time-delta-title", "children"),
      Output("total-time-display-container", "children"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
@@ -1299,21 +1623,20 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     # --- Map inputs to prefixes ---
     # The order of inputs is: ma-slider, original-data, compare-data, start-block-vals, end-block-vals, ...
     start_block_inputs = {} # start-block-dropdown values
-    if ctx.inputs_list[4]:
-        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]}
+    if ctx.inputs_list[4]: # Input index for start-block-dropdown
+        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]} # type: ignore
 
     end_block_inputs = {} # end-block-dropdown values
-    if ctx.inputs_list[5]:
-        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[5]}
+    if ctx.inputs_list[5]: # Input index for end-block-dropdown
+        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[5]} # type: ignore
 
- 
     def create_header_with_tooltip(text, metric_id, style=None):
         if metric_id in tooltip_texts:
             info_icon = html.Span([ # type: ignore
                 "\u00A0",  # Non-breaking space
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
-                id={'type': 'info-icon', 'metric': metric_id},
+                id={'type': 'info-icon', 'metric': metric_id}, # type: ignore
                 style={'cursor': 'pointer'},
                 title='Click for more info'
             )
@@ -1322,6 +1645,17 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    def create_chart_title_with_icon(title_text, metric_id):
+        """Creates a title component with an info icon."""
+        if metric_id in tooltip_texts:
+            return html.Div([ # type: ignore
+                html.H5(title_text, style={'display': 'inline-block', 'marginRight': '10px'}),
+                html.Span([html.I(className="bi bi-info-circle-fill text-info")],
+                          id={'type': 'info-icon', 'metric': metric_id}, # type: ignore
+                          style={'cursor': 'pointer', 'fontSize': '1.1em'}, title='Click for more info')
+            ], style={'textAlign': 'center'})
+        return html.H5(title_text, style={'textAlign': 'center'})
 
 
     # --- Load and process data from stores ---
@@ -1344,7 +1678,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     if df_progress_local.empty and df_compare.empty:
         graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
         empty_fig = go.Figure()
-        empty_fig.update_layout(
+        empty_fig.update_layout( # type: ignore
             title_text='Upload a sync_progress.csv file to begin',
             template=graph_template,
             **background_style
@@ -1352,14 +1686,14 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
         
         # Correctly form empty outputs for pattern-matching callbacks
-        num_start_dds = len(ctx.outputs_grouping[4]) if 4 < len(ctx.outputs_grouping) else 0
-        num_end_dds = len(ctx.outputs_grouping[6]) if 6 < len(ctx.outputs_grouping) else 0
+        num_start_dds = len(ctx.outputs_grouping[9]) if 9 < len(ctx.outputs_grouping) else 0
+        num_end_dds = len(ctx.outputs_grouping[11]) if 11 < len(ctx.outputs_grouping) else 0
         empty_start_opts = [[] for _ in range(num_start_dds)]
-        empty_start_vals = [None for _ in range(num_start_dds)]
+        empty_start_vals = [None] * len(ctx.outputs_grouping[10]) if 10 < len(ctx.outputs_grouping) else []
         empty_end_opts = [[] for _ in range(num_end_dds)]
-        empty_end_vals = [None for _ in range(num_end_dds)]
-
-        return empty_fig, empty_fig, empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
+        empty_end_vals = [None] * len(ctx.outputs_grouping[12]) if 12 < len(ctx.outputs_grouping) else []
+        # Return empty titles as well
+        return empty_fig, empty_fig, empty_fig, empty_fig, None, None, None, None, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
@@ -1377,7 +1711,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     is_reset = isinstance(triggered_id, dict) and triggered_id.get('type') == 'reset-view-button'
 
     # --- Calculate ranges and options for each file ---
-    for prefix, info in data_map.items():
+    for prefix_str, info in data_map.items():
         df = info['df']
         if not df.empty:
             min_block = df['Block_height'].min()
@@ -1386,11 +1720,11 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             unique_heights = sorted(df['Block_height'].unique())
             info['options'] = [{'label': f"{int(h):,}", 'value': h} for h in unique_heights]
             
-            current_start = start_block_inputs.get(prefix)
-            current_end = end_block_inputs.get(prefix)
+            current_start = start_block_inputs.get(prefix_str)
+            current_end = end_block_inputs.get(prefix_str)
 
             # Determine start and end blocks based on context
-            if is_reset and triggered_id.get('prefix') == prefix:
+            if is_reset and triggered_id.get('prefix') == prefix_str:
                 info['start_block'] = min_block
                 info['end_block'] = max_block
             elif is_upload_or_clear or current_start is None or current_end is None:
@@ -1585,17 +1919,18 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         xaxis_title="<b>Block Height</b>",
         yaxis_title="<b>Sync in Progress Time [s]</b>",
         yaxis2_title="<b>Sync Speed [Blocks/sec]</b>",
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         template=graph_template,
-        margin=dict(l=80, r=80, t=80, b=80),
+        margin=dict(l=80, r=80, t=80, b=120),
         **background_style
     )
 
     # --- Distribution Graph ---
     bins = dist_bins_values[bins_index]
-    fig3 = make_subplots(rows=1, cols=2, subplot_titles=('Sync Speed Distribution', 'Sync Time Delta Distribution'))
+    fig_dist_speed = go.Figure()
+    fig_dist_time = go.Figure()
 
-    def add_distribution_trace(fig, df, col, name, color, row, col_num, legend_name):
+    def add_distribution_trace(fig, df, col, name, color):
         if not df.empty and col in df.columns:
             data = df[col].dropna()
             if len(data) > 1:
@@ -1608,9 +1943,8 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     nbinsx=bins,
                     histnorm='probability density',
                     hovertemplate='<b>Range</b>: %{x}<br><b>Density</b>: %{y}<extra></extra>',
-                    showlegend=True, # Show this trace in the legend
-                    legend=legend_name
-                ), row=row, col=col_num)
+                    showlegend=True
+                ))
 
                 # KDE Curve
                 try:
@@ -1624,54 +1958,56 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                         name=f'{name} (KDE)',
                         hovertemplate='<b>Value</b>: %{x:.2f}<br><b>Density</b>: %{y:.4f}<extra></extra>',
                         line=dict(color=color, width=2),
-                        showlegend=True,
-                        legend=legend_name
-                    ), row=row, col=col_num)
+                        showlegend=True
+                    ))
                 except Exception as e:
                     print(f"Could not generate KDE for {name} - {col}: {e}")
 
     # Sync Speed Distribution
-    add_distribution_trace(fig3, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, 1, 1, 'legend1')
+    add_distribution_trace(fig_dist_speed, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color)
     if not df_compare_display.empty:
-        add_distribution_trace(fig3, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', 1, 1, 'legend1')
+        add_distribution_trace(fig_dist_speed, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta')
 
     # Sync Time Delta Distribution
     if not df_original_display.empty:
         time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_orig) > 1:
-            add_distribution_trace(fig3, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, 1, 2, 'legend2')
+            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color)
 
     if not df_compare_display.empty:
         time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_comp) > 1:
-            add_distribution_trace(fig3, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', 1, 2, 'legend2')
+            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta')
 
-    fig3.update_layout(
-        title_text=f'Data Distribution (Bins: {bins})',
+    fig_dist_speed.update_layout(
+        title_text=f'Sync Speed Distribution (Bins: {bins})',
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend1=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
-        legend2=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="right", x=1),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         hovermode='x unified',
         hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=80),
+        margin=dict(l=80, r=80, t=80, b=120),
         font_size=12,
-        xaxis=dict(title_font_size=14),
-        yaxis=dict(title_font_size=14),
-        xaxis2=dict(title_font_size=14),
-        yaxis2=dict(title_font_size=14),
+        xaxis_title="Sync Speed [Blocks/sec]",
+        yaxis_title="Density",
         **background_style
     )
-    fig3.update_xaxes(title_text="Sync Speed [Blocks/sec]", row=1, col=1)
-    fig3.update_yaxes(title_text="Density", row=1, col=1)
-    fig3.update_xaxes(title_text="Time Between Samples [s]", row=1, col=2)
-    fig3.update_yaxes(title_text="Density", row=1, col=2)
 
-    # If only one dataset, hide the legend for the distribution plot
-    if df_compare_display.empty:
-        fig3.update_layout(showlegend=False)
-
+    fig_dist_time.update_layout(
+        title_text=f'Sync Time Delta Distribution (Bins: {bins})',
+        height=500,
+        bargap=0.1,
+        template=graph_template,
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
+        hovermode='x unified',
+        hoverlabel=hover_label_style,
+        margin=dict(l=80, r=80, t=80, b=120),
+        font_size=12,
+        xaxis_title="Time Between Samples [s]",
+        yaxis_title="Density",
+        **background_style
+    )
 
     # --- Update Y-Axes for fig2 with specific colors for clarity ---
     fig2.update_yaxes(
@@ -1700,15 +2036,9 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         hovermode='x unified', hoverlabel=hover_label_style,
         xaxis_showspikes=True, xaxis_spikemode='across', xaxis_spikedash='dot',
         yaxis_showspikes=True, yaxis_spikedash='dot', yaxis2_showspikes=True, yaxis2_spikedash='dot',
-        legend=dict(orientation="v",
-                    yanchor="top",
-                    y=-0.2,
-                    xanchor="left",
-                    x=0,
-                    itemclick='toggle',
-                    itemdoubleclick='toggleothers'),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         template=graph_template,
-        margin=dict(l=80, r=80, t=80, b=80),
+        margin=dict(l=80, r=80, t=80, b=120),
         yaxis2=dict(
             side='right',
             overlaying='y',
@@ -1761,11 +2091,12 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     fig.update_xaxes(title_text="Sync in Progress Time [s]", automargin=True)
 
     # --- Prepare outputs for dropdowns ---
-    # The order of outputs is determined by Dash. We can get it from ctx.outputs_list.
-    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[4]]
-    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_grouping[5]]
-    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[6]]
-    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_grouping[7]]
+    # The order of outputs is determined by Dash. We get it from ctx.outputs_grouping.
+    # We must check if the grouping exists, as it might not on initial load.
+    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[9]] if 9 < len(ctx.outputs_grouping) else []
+    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_grouping[10]] if 10 < len(ctx.outputs_grouping) else []
+    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[11]] if 11 < len(ctx.outputs_grouping) else []
+    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_grouping[12]] if 12 < len(ctx.outputs_grouping) else []
 
     # --- Update total time display and metrics tables ---
     table_title_original = f"Original: {original_filename}"
@@ -2014,7 +2345,14 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         else:
             table_children = [html.P("No data to display in table.")]
 
-    return fig, fig2, fig3, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
+    # Create titles with icons
+    title1 = create_chart_title_with_icon(f'Block Height and Sync Speed vs. Sync Time (MA Window: {window})', 'progress-graph-title')
+    title2 = create_chart_title_with_icon(f'Sync Time and Sync Speed vs. Block Height (MA Window: {window})', 'blockheight-vs-speed-graph-title')
+    title3 = create_chart_title_with_icon(f'Sync Speed Distribution (Bins: {bins})', 'distribution-graph-speed-title')
+    title4 = create_chart_title_with_icon(f'Sync Time Delta Distribution (Bins: {bins})', 'distribution-graph-time-delta-title')
+
+
+    return fig, fig2, fig_dist_speed, fig_dist_time, title1, title2, title3, title4, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
 
 @app.callback(
     Output('action-feedback-store', 'data', allow_duplicate=True),
@@ -2658,26 +2996,8 @@ def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
 
     raise dash.exceptions.PreventUpdate
 
-app.clientside_callback(
-    """
-    function(upload_id) {
-        if (!upload_id) {
-            return window.dash_clientside.no_update;
-        }
-        // This is a bit of a hack to reset the dcc.Upload component.
-        // It finds the 'x' (remove) button inside the upload component and clicks it.
-        // This is more reliable than trying to set `contents` to null from the server.
-        const uploadElement = document.getElementById(upload_id);
-        if (uploadElement) {
-            // The actual clickable element is often a div or span inside the main component
-            const removeButton = uploadElement.querySelector('div > div > span');
-            if (removeButton) {
-                removeButton.click();
-            }
-        }
-        return window.dash_clientside.no_update;
-    }
-    """,
+app.clientside_callback( # type: ignore
+    dash.ClientsideFunction(namespace='clientside', function_name='reset_upload_component'),
     Output('reset-upload-store', 'data', allow_duplicate=True),
     Input('reset-upload-store', 'data'),
     prevent_initial_call=True
@@ -2685,291 +3005,37 @@ app.clientside_callback(
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
 # --- Callbacks for saving HTML report ---
-app.clientside_callback(
-    """
-    async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure) {
-        if (!n_clicks) {
-            // This is the initial call or a callback update where the button wasn't clicked.
-            return window.dash_clientside.no_update;
-        }
-
-        try {
-            const rootElement = document.documentElement;
-            if (!rootElement) {
-                return 'CLIENTSIDE_ERROR: root element (html) not found.';
-            }
-            // Clone the container to avoid modifying the live DOM
-            const clone = rootElement.cloneNode(true);
-
-            const isDarkTheme = document.documentElement.getAttribute('data-bs-theme') === 'dark';
-
-            // --- Replace interactive elements with static text ---
-
-            // 1. Dropdowns
-            clone.querySelectorAll('div[id*="start-block-dropdown"], div[id*="end-block-dropdown"]').forEach(clonedDropdown => {
-                const originalDropdown = document.getElementById(clonedDropdown.id);
-                const wrapper = clonedDropdown.parentElement;
-                if (originalDropdown && wrapper && wrapper.parentElement) {
-                    const originalDropdownValue = originalDropdown.querySelector('.Select-value-label, .Select__single-value');
-                    const valueText = originalDropdownValue ? originalDropdownValue.textContent : 'N/A';
-                    const staticEl = document.createElement('div');
-                    staticEl.textContent = valueText;
-                    staticEl.className = 'text-end';
-                    staticEl.style.width = '50%';
-                    staticEl.style.fontSize = '0.875em';
-                    staticEl.style.color = 'var(--bs-body-color)';
-                    wrapper.parentElement.replaceChild(staticEl, wrapper);
-                }
-            });
-
-            // 2. Metadata Inputs
-            clone.querySelectorAll('input[id*="metadata-input"]').forEach(input => {
-                if (input.parentElement) {
-                    const valueText = input.value || 'N/A';
-                    const staticEl = document.createElement('div');
-                    staticEl.textContent = valueText;
-                    staticEl.className = 'text-end text-muted';
-                    staticEl.style.fontSize = '0.875em';
-                    input.parentElement.replaceChild(staticEl, input);
-                }
-            });
-
-            // 3. Slider
-            const ma_windows = [10, 100, 200, 300, 400, 500];
-            const window_size = ma_windows[ma_slider_value_index];
-            const maSliderContainer = clone.querySelector('#ma-slider-container');
-            if (maSliderContainer) {
-                const staticEl = document.createElement('div');
-                staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
-                staticEl.className = 'mt-3'; // Add some margin
-                staticEl.style.fontWeight = 'bold';
-                maSliderContainer.parentNode.replaceChild(staticEl, maSliderContainer);
-            }
-            const dist_bins_values = [10, 100, 200, 300, 400, 500];
-            const dist_bins_size = dist_bins_values[dist_slider_value_index];
-            const distSliderContainer = clone.querySelector('#distribution-bins-slider-container');
-            if (distSliderContainer) {
-                const staticEl = document.createElement('div');
-                staticEl.textContent = `Distribution Bins: ${dist_bins_size}`;
-                staticEl.className = 'mt-3';
-                staticEl.style.fontWeight = 'bold';
-                distSliderContainer.parentNode.replaceChild(staticEl, distSliderContainer);
-            }
-
-            // --- Remove all interactive/unnecessary elements ---
-            const selectorsToRemove = [
-                // General UI controls
-                '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
-                '#show-data-table-switch-container', '#original-upload-container', '#compare-upload-container', 'span[id*="info-icon"]',
-                'script', '#loading-overlay',
-                '#_dash-dev-tools-ui-container', // Dash Dev Tools main container
-                // Dash developer/debug panels and error overlays (Dash 3.x)
-                '#_dash-debug-menu',
-                '.dash-debug-menu',
-                '.dash-debug-menu__button',
-                '.dash-debug-menu__title',
-                '.dash-debug-menu__version',
-                '.dash-debug-menu__server',
-                '.dash-debug-menu__status',
-                '.dash-debug-menu__icon',
-                '.dash-debug-menu__indicator',
-                '.dash-debug-menu__status--success',
-                '.dash-debug-menu__status--error',
-                '.bi-arrow-bar-left',
-                '.bi-arrow-left',
-                '.bi-arrow-return-left',
-                '.dash-error-message',
-                '.dash-fe-error__title',
-                '.dash-fe-error__message',
-                '.dash-fe-error__stack',
-                '.dash-dev-tools-menu',
-                '.dash-dev-tools-menu__button',
-                '.dash-dev-tools-menu__title',
-                '.dash-dev-tools-menu__version',
-                '.dash-dev-tools-menu__server',
-                // Reload and discard buttons
-                '#reload-original-button', '#reload-compare-button',
-                '#discard-original-button', '#discard-compare-button',
-                // Individual metadata controls
-                'span[id*="delete-metadata-button"]',
-                'span[id*="unsaved-changes-badge"]'
-            ];
-            // Remove any undefined or empty selectors to avoid JS errors
-            const validSelectorsToRemove = selectorsToRemove.filter(s => typeof s === 'string' && s.length > 0);
-            const extraArrowSelectors = [
-                '.dash-debug-menu__outer'
-                ,'.dash-debug-menu__outer--expanded'
-                ,'.dash-debug-menu__toggle'
-                ,'.dash-debug-menu__toggle--expanded'
-            ];
-            const allSelectorsToRemove = validSelectorsToRemove.concat(extraArrowSelectors);
-            clone.querySelectorAll(allSelectorsToRemove.join(', ')).forEach(el => el.remove());
-
-            // --- Remove entire rows for certain controls ---
-            const rowSelectorsToRemove = [
-                'button[id*="add-metadata-button"]', // The "Add" button and its row
-                'button[id*="reset-view-button"]', // The entire bar with Reset, Clear, and Save buttons
-                'button[id*="save-overwrite-button"]'
-            ];
-            clone.querySelectorAll(rowSelectorsToRemove.join(', ')).forEach(el => {
-                const parentRow = el.closest('.list-group-item');
-                if (parentRow) parentRow.remove();
-            });
-
-            // --- Convert all Plotly graphs to static images ---
-            const graphsToConvert = [
-                { id: 'progress-graph', figure: progress_figure },
-                { id: 'blockheight-vs-speed-graph', figure: blockheight_figure },
-                { id: 'distribution-graph', figure: distribution_figure }
-            ];
-
-            for (const graphInfo of graphsToConvert) {
-                const graphDiv = clone.querySelector(`#${graphInfo.id}`);
-                const originalGraphDiv = document.getElementById(graphInfo.id);
-
-                if (graphDiv && originalGraphDiv && window.Plotly && graphInfo.figure) {
-                    const tempDiv = document.createElement('div');
-                    // Position it off-screen
-                    tempDiv.style.position = 'absolute';
-                    tempDiv.style.left = '-9999px';
-                    tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
-                    tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
-                    document.body.appendChild(tempDiv);
-
-                    try {
-                        const data = JSON.parse(JSON.stringify(graphInfo.figure.data));
-                        const layout = JSON.parse(JSON.stringify(graphInfo.figure.layout));
-
-                        if (isDarkTheme) {
-                            layout.paper_bgcolor = '#222529'; // Darkly theme background
-                            layout.plot_bgcolor = '#222529';
-                        }
-
-                        // Increase font sizes for better readability in the saved image
-                        const fontSizeIncrease = 6; // Increase font size by 6 points
-                        // For subplot charts, the main title and legends need a bigger boost.
-                        const subplotFontSizeIncrease = graphInfo.id === 'distribution-graph' ? fontSizeIncrease * 2 : fontSizeIncrease;
-
-                        if (layout.title) {
-                            layout.title.font = layout.title.font || {};
-                            // Use a larger increase for the distribution graph's main title
-                            const titleSizeIncrease = graphInfo.id === 'distribution-graph' ? subplotFontSizeIncrease + 4 : fontSizeIncrease;
-                            layout.title.font.size = (layout.title.font.size || 16) + titleSizeIncrease;
-                        }
-                        ['xaxis', 'yaxis', 'xaxis2', 'yaxis2'].forEach(axis => {
-                            if (layout[axis]) {
-                                layout[axis].title = layout[axis].title || {};
-                                layout[axis].title.font = layout[axis].title.font || {};
-                                layout[axis].title.font.size = (layout[axis].title.font.size || 12) + fontSizeIncrease + 2;
-                                layout[axis].tickfont = layout[axis].tickfont || {};
-                                layout[axis].tickfont.size = (layout[axis].tickfont.size || 12) + fontSizeIncrease;
-                            }
-                        });
-                        // Handle single or multiple legends
-                        const legends = ['legend', 'legend1', 'legend2'];
-                        for (const legendName of legends) {
-                            if (layout[legendName]) {
-                                layout[legendName].font = layout[legendName].font || {};
-                                layout[legendName].font.size = (layout[legendName].font.size || 10) + subplotFontSizeIncrease + 2;
-                            }
-                        }
-
-                        await window.Plotly.newPlot(tempDiv, data, layout, {displayModeBar: false});
-
-                        const dataUrl = await window.Plotly.toImage(tempDiv, {
-                            format: 'png',
-                            height: originalGraphDiv.offsetHeight * 1.5,
-                            width: originalGraphDiv.offsetWidth * 1.5,
-                            scale: 2
-                        });
-
-                        const img = document.createElement('img');
-                        img.src = dataUrl;
-                        img.style.width = '100%';
-                        img.style.height = 'auto';
-                        graphDiv.parentNode.replaceChild(img, graphDiv);
-                    } catch (e) {
-                        console.error(`Plotly.toImage failed for ${graphInfo.id}:`, e);
-                        const p = document.createElement('p');
-                        p.innerText = '[Error converting chart to image]';
-                        p.style.color = 'red';
-                        graphDiv.parentNode.replaceChild(p, graphDiv);
-                    } finally {
-                        document.body.removeChild(tempDiv);
-                    }
-                } else if (graphDiv && graphDiv.parentNode) {
-                    const p = document.createElement('p');
-                    p.innerText = '[Chart not included in this report version.]';
-                    graphDiv.parentNode.replaceChild(p, graphDiv);
-                }
-            }
-
-            // --- Fetch and embed CSS ---
-            let cssText = '';
-            const styleSheets = Array.from(document.styleSheets);
-            const cssPromises = styleSheets.map(sheet => {
-                try {
-                    // For external stylesheets, fetch the content
-                    if (sheet.href) {
-                        return fetch(sheet.href)
-                            .then(response => response.ok ? response.text() : '')
-                            .catch(() => '');
-                    } else if (sheet.cssRules) {
-                        return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
-                    }
-                } catch (e) {
-                    // Silently fail on security errors for cross-origin stylesheets
-                }
-                return undefined; // Return undefined for sheets that can't be processed
-            }).filter(p => p); // Filter out undefined promises
-
-            const cssContents = await Promise.all(cssPromises);
-            cssText = cssContents.join('\\n'); // Use '\\n' for JS newlines
-
-            // --- Escape backticks and other problematic characters ---
-            const cleanCssText = cssText.replace(/`/g, '\\`');
-
-            // Construct the full HTML document
-            const fullHtml = `
-                <!DOCTYPE html>
-                <html lang="en" data-bs-theme="${isDarkTheme ? 'dark' : 'light'}"><head><meta charset="utf-8"><title>Sync Progress Report</title><style>${cleanCssText}</style></head>
-                <body>${clone.querySelector('body').innerHTML}</body>
-                </html>
-            `;
-
-            return fullHtml;
-        } catch (e) {
-            alert('Caught an error in callback: ' + e.message);
-            return 'CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack;
-        }
-    }
-    """,
+app.clientside_callback( # type: ignore
+    dash.ClientsideFunction(namespace='clientside', function_name='report_generator'),
     Output('html-content-store', 'data', allow_duplicate=True),
     Input('save-button', 'n_clicks'),
     [State('ma-window-slider', 'value'),
      State('distribution-bins-slider', 'value'),
      State('progress-graph', 'figure'),
      State('blockheight-vs-speed-graph', 'figure'),
-     State('distribution-graph', 'figure')],
+     State('distribution-graph-speed', 'figure'),
+     State('distribution-graph-time-delta', 'figure')],
     prevent_initial_call=True
 )
 
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
-     Output('reports-filepath-store', 'data', allow_duplicate=True)],
-    [Input('html-content-store', 'data')],
+     Output('reports-filepath-store', 'data', allow_duplicate=True)], # type: ignore
+    [Input('html-content-store', 'data'),
+     Input('clientside-script-store', 'data')],
     prevent_initial_call=True
 )
-def save_report_on_server(html_content):
-    if not html_content or 'CLIENTSIDE_ERROR' in html_content:
-        if html_content:
+def save_report_on_server(data, script_loaded):
+    if not data or not script_loaded:
+        if data and 'CLIENTSIDE_ERROR' in data.get('content', ''):
             return {'title': 'Error Saving Reports', 'body': "A client-side error occurred during report generation."}, None
         raise dash.exceptions.PreventUpdate
-
+    html_content = data
     # --- Replace MA slider placeholder in the generated HTML ---
     # The clientside callback no longer does this, so we do it here on the server.
     # Generate a dynamic filename with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    html_content = data.get('content')
     filename = f"sync_progress_reports_{timestamp}.html"
     try:
         reports_dir = os.path.join(SCRIPT_DIR, "reports")
@@ -2980,6 +3046,12 @@ def save_report_on_server(html_content):
             return {'title': 'Reports Saved', 'body': f"Reports successfully saved to: {filepath}"}, filepath
     except Exception as e:
             return {'title': 'Error Saving Reports', 'body': f"An error occurred while saving the file on the server: {e}"}, None
+
+app.clientside_callback(
+    dash.ClientsideFunction(namespace='clientside', function_name='clientside_script_loaded'), # type: ignore
+    Output('clientside-script-store', 'data'),
+    Input('main-container', 'children') # Triggered once the layout is loaded
+)
 
 @app.callback(
     Output('reports-filepath-store', 'data', allow_duplicate=True),
