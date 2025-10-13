@@ -799,7 +799,6 @@ app.layout = html.Div([
     dcc.Graph(id='upload-callback-output', style={'display': 'none'}),
     dcc.Graph(id='clear-callback-output', style={'display': 'none'}),
     dcc.Graph(id='main-callback-output', style={'display': 'none'}),
-    dcc.Graph(id='save-callback-output', style={'display': 'none'}),
     dcc.Store(id='original-data-store', data=initial_original_data),
     dcc.Store(id='compare-data-store'), # No initial data for comparison
     dcc.Store(id='action-feedback-store'), # For modal feedback
@@ -866,7 +865,7 @@ app.layout = html.Div([
         html.Div([
             html.Label("Moving Average Window:", className="me-2"),
             html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="ma-window-slider-progress", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
+            html.Div(dcc.Slider(id="ma-window-slider", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
         ], id="ma-slider-container", style={'display': 'flex', 'alignItems': 'flex-start', 'marginTop': '20px'}),
         dcc.Graph(id="distribution-graph", className="my-4"),
         html.Div([
@@ -1270,7 +1269,7 @@ def reload_compare_data(n_clicks, store_data):
      Output("data-table-container", "children"),
      Output("data-table-container", "style"),
     ],
-    [Input("ma-window-slider-progress", "value"), # 0
+    [Input("ma-window-slider", "value"), # 0
      Input("distribution-bins-slider", "value"),
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
@@ -1656,6 +1655,12 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         legend2=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="right", x=1),
         hovermode='x unified',
         hoverlabel=hover_label_style,
+        margin=dict(l=80, r=80, t=80, b=80),
+        font_size=12,
+        xaxis=dict(title_font_size=14),
+        yaxis=dict(title_font_size=14),
+        xaxis2=dict(title_font_size=14),
+        yaxis2=dict(title_font_size=14),
         **background_style
     )
     fig3.update_xaxes(title_text="Sync Speed [Blocks/sec]", row=1, col=1)
@@ -2348,8 +2353,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True),
-     Output('save-callback-output', 'figure', allow_duplicate=True),
-     Output('reset-upload-store', 'data', allow_duplicate=True)],
+     Output('reset-upload-store', 'data', allow_duplicate=True)], # type: ignore
     [Input({'type': 'save-as-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input({'type': 'save-overwrite-button', 'prefix': dash.dependencies.ALL}, 'n_clicks')],
     [State('original-data-store', 'data'),
@@ -2406,8 +2410,7 @@ def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filte
         if 'Error' not in message:
             new_unsaved_data[prefix] = False
             upload_id_to_reset = 'upload-original-progress' if prefix == 'Original' else 'upload-compare-progress'
-
-    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, {}, upload_id_to_reset
+    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, upload_id_to_reset
 
 @app.callback(
     Output('theme-switch', 'value'),
@@ -2684,16 +2687,16 @@ app.clientside_callback(
 # --- Callbacks for saving HTML report ---
 app.clientside_callback(
     """
-    async function(n_clicks, slider_value_index, progress_figure, blockheight_figure, distribution_figure) {
+    async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure) {
         if (!n_clicks) {
             // This is the initial call or a callback update where the button wasn't clicked.
-            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            return window.dash_clientside.no_update;
         }
 
         try {
             const rootElement = document.documentElement;
             if (!rootElement) {
-                return ['CLIENTSIDE_ERROR: root element (html) not found.', null];
+                return 'CLIENTSIDE_ERROR: root element (html) not found.';
             }
             // Clone the container to avoid modifying the live DOM
             const clone = rootElement.cloneNode(true);
@@ -2733,14 +2736,24 @@ app.clientside_callback(
 
             // 3. Slider
             const ma_windows = [10, 100, 200, 300, 400, 500];
-            const window_size = ma_windows[slider_value_index];
-            const sliderContainer = clone.querySelector('#ma-slider-container');
-            if (sliderContainer) {
+            const window_size = ma_windows[ma_slider_value_index];
+            const maSliderContainer = clone.querySelector('#ma-slider-container');
+            if (maSliderContainer) {
                 const staticEl = document.createElement('div');
                 staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
                 staticEl.className = 'mt-3'; // Add some margin
                 staticEl.style.fontWeight = 'bold';
-                sliderContainer.parentNode.replaceChild(staticEl, sliderContainer);
+                maSliderContainer.parentNode.replaceChild(staticEl, maSliderContainer);
+            }
+            const dist_bins_values = [10, 100, 200, 300, 400, 500];
+            const dist_bins_size = dist_bins_values[dist_slider_value_index];
+            const distSliderContainer = clone.querySelector('#distribution-bins-slider-container');
+            if (distSliderContainer) {
+                const staticEl = document.createElement('div');
+                staticEl.textContent = `Distribution Bins: ${dist_bins_size}`;
+                staticEl.className = 'mt-3';
+                staticEl.style.fontWeight = 'bold';
+                distSliderContainer.parentNode.replaceChild(staticEl, distSliderContainer);
             }
 
             // --- Remove all interactive/unnecessary elements ---
@@ -2834,11 +2847,16 @@ app.clientside_callback(
 
                         // Increase font sizes for better readability in the saved image
                         const fontSizeIncrease = 6; // Increase font size by 6 points
+                        // For subplot charts, the main title and legends need a bigger boost.
+                        const subplotFontSizeIncrease = graphInfo.id === 'distribution-graph' ? fontSizeIncrease * 2 : fontSizeIncrease;
+
                         if (layout.title) {
                             layout.title.font = layout.title.font || {};
-                            layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
+                            // Use a larger increase for the distribution graph's main title
+                            const titleSizeIncrease = graphInfo.id === 'distribution-graph' ? subplotFontSizeIncrease + 4 : fontSizeIncrease;
+                            layout.title.font.size = (layout.title.font.size || 16) + titleSizeIncrease;
                         }
-                        ['xaxis', 'yaxis', 'yaxis2'].forEach(axis => {
+                        ['xaxis', 'yaxis', 'xaxis2', 'yaxis2'].forEach(axis => {
                             if (layout[axis]) {
                                 layout[axis].title = layout[axis].title || {};
                                 layout[axis].title.font = layout[axis].title.font || {};
@@ -2847,9 +2865,13 @@ app.clientside_callback(
                                 layout[axis].tickfont.size = (layout[axis].tickfont.size || 12) + fontSizeIncrease;
                             }
                         });
-                        if (layout.legend) {
-                            layout.legend.font = layout.legend.font || {};
-                            layout.legend.font.size = (layout.legend.font.size || 10) + fontSizeIncrease + 2;
+                        // Handle single or multiple legends
+                        const legends = ['legend', 'legend1', 'legend2'];
+                        for (const legendName of legends) {
+                            if (layout[legendName]) {
+                                layout[legendName].font = layout[legendName].font || {};
+                                layout[legendName].font.size = (layout[legendName].font.size || 10) + subplotFontSizeIncrease + 2;
+                            }
                         }
 
                         await window.Plotly.newPlot(tempDiv, data, layout, {displayModeBar: false});
@@ -2915,17 +2937,17 @@ app.clientside_callback(
                 </html>
             `;
 
-            return [fullHtml, {}];
+            return fullHtml;
         } catch (e) {
             alert('Caught an error in callback: ' + e.message);
-            return ['CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack, {}];
+            return 'CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack;
         }
     }
     """,
-    [Output('html-content-store', 'data'),
-     Output('save-callback-output', 'figure', allow_duplicate=True)],
+    Output('html-content-store', 'data', allow_duplicate=True),
     Input('save-button', 'n_clicks'),
-    [State('ma-window-slider-progress', 'value'),
+    [State('ma-window-slider', 'value'),
+     State('distribution-bins-slider', 'value'),
      State('progress-graph', 'figure'),
      State('blockheight-vs-speed-graph', 'figure'),
      State('distribution-graph', 'figure')],
@@ -2935,7 +2957,7 @@ app.clientside_callback(
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('reports-filepath-store', 'data', allow_duplicate=True)],
-    Input('html-content-store', 'data'),
+    [Input('html-content-store', 'data')],
     prevent_initial_call=True
 )
 def save_report_on_server(html_content):
@@ -2943,6 +2965,9 @@ def save_report_on_server(html_content):
         if html_content:
             return {'title': 'Error Saving Reports', 'body': "A client-side error occurred during report generation."}, None
         raise dash.exceptions.PreventUpdate
+
+    # --- Replace MA slider placeholder in the generated HTML ---
+    # The clientside callback no longer does this, so we do it here on the server.
     # Generate a dynamic filename with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"sync_progress_reports_{timestamp}.html"
@@ -2952,9 +2977,9 @@ def save_report_on_server(html_content):
         filepath = os.path.join(reports_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html_content)
-        return {'title': 'Reports Saved', 'body': f"Reports successfully saved to: {filepath}"}, filepath
+            return {'title': 'Reports Saved', 'body': f"Reports successfully saved to: {filepath}"}, filepath
     except Exception as e:
-        return {'title': 'Error Saving Reports', 'body': f"An error occurred while saving the file on the server: {e}"}, None
+            return {'title': 'Error Saving Reports', 'body': f"An error occurred while saving the file on the server: {e}"}, None
 
 @app.callback(
     Output('reports-filepath-store', 'data', allow_duplicate=True),
