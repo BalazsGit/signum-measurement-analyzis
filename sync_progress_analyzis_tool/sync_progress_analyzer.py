@@ -5,9 +5,9 @@ def upgrade_dependencies():
     """Attempts to upgrade the core dependencies of the application at startup."""
     print("--- Checking for dashboard dependency updates ---")
     try:
-        # Using a single call to pip is more efficient
+        # Using a single call to pip is more efficient. Add scipy for KDE plot.
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "scipy"],
             check=True, capture_output=True, text=True, timeout=300 # 5 minute timeout
         )
         print("Dependencies are up to date.")
@@ -29,6 +29,8 @@ import base64
 import io
 from datetime import timedelta
 import datetime
+import numpy as np
+from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
 import os
 import webbrowser
@@ -250,11 +252,6 @@ def setup_directories():
         os.makedirs(measurements_dir)
         print(f"Info: Created 'measurements' directory at: {measurements_dir}")
 
-    # Directory for saved files with updated metadata
-    saved_dir = os.path.join(measurements_dir, "saved")
-    if not os.path.isdir(saved_dir):
-        os.makedirs(saved_dir)
-
 # --- Helper Functions ---
 def find_header_row(lines):
     """Finds the index of the header row in a list of lines by looking for key columns."""
@@ -388,47 +385,47 @@ tooltip_texts = {
         'body': "The version of the database software."
     },
     'Total Sync in Progress Time': {
-        'title': 'Total Sync in Progress Time',
+        'title': 'Total Sync in Progress Time [s]',
         'body': "This metric represents the total duration the node has spent in an active synchronization state. The timer for this metric is active only when the node's block height is significantly behind the network's current height (typically more than 10 blocks). It provides a precise measure of the time required to catch up with the blockchain, excluding periods when the node is already fully synchronized or idle. This is a key performance indicator for evaluating the efficiency of the sync process under load."
     },
     'Total Blocks Synced': {
         'title': 'Total Blocks Synced',
         'body': "This value indicates the total number of blockchain blocks that have been downloaded, verified, and applied by the node during the measurement period. It is calculated as the difference between the final and initial block height. This metric, in conjunction with the sync time, is fundamental for calculating the overall synchronization speed."
     },
-    'Overall Average Sync Speed (Blocks/sec)': {
-        'title': 'Overall Average Sync Speed (Blocks/sec)',
+    'Overall Average Sync Speed [Blocks/sec]': {
+        'title': 'Overall Average Sync Speed [Blocks/sec]',
         'body': "This is a high-level performance metric calculated by dividing the 'Total Blocks Synced' by the 'Total Sync in Progress Time' in seconds. It provides a single, averaged value representing the node's throughput over the entire synchronization process. While useful for a quick comparison, it can mask variations in performance that occur at different stages of syncing."
     },
-    'Min Sync Speed (Blocks/sec sample)': {
-        'title': 'Min Sync Speed (Blocks/sec Sampled)',
+    'Min Sync Speed [Blocks/sec sample]': {
+        'title': 'Min Sync Speed [Blocks/sec Sampled]',
         'body': "This metric shows the minimum synchronization speed observed between any two consecutive data points in the sample. A very low or zero value can indicate periods of network latency, slow peer response, or high computational load on the node (e.g., during verification of blocks with many complex transactions), causing a temporary stall in progress."
     },
-    'Q1 Sync Speed (Blocks/sec sample)': {
-        'title': 'Q1/25th Percentile Sync Speed (Blocks/sec)',
+    'Q1 Sync Speed [Blocks/sec sample]': {
+        'title': 'Q1/25th Percentile Sync Speed [Blocks/sec]',
         'body': "The 25th percentile (or first quartile, Q1) is the value below which 25% of the synchronization speed samples fall. It indicates the performance level that the node meets or exceeds 75% of the time. A higher Q1 value suggests that the node consistently maintains a good minimum performance level, with fewer periods of very low speed."
     },
-    'Mean Sync Speed (Blocks/sec sample)': {
-        'title': 'Mean Sync Speed (Blocks/sec Sampled)',
+    'Mean Sync Speed [Blocks/sec sample]': {
+        'title': 'Mean Sync Speed [Blocks/sec Sampled]',
         'body': "This represents the statistical average (mean) of the 'Blocks/sec' values calculated for each interval between data points. Unlike the 'Overall Average', this metric is the average of individual speed samples, giving a more granular view of the typical performance, but it can be skewed by extremely high or low outliers."
     },
-    'Median Sync Speed (Blocks/sec sample)': {
-        'title': 'Median Sync Speed (Blocks/sec Sampled)',
+    'Median Sync Speed [Blocks/sec sample]': {
+        'title': 'Median Sync Speed [Blocks/sec Sampled]',
         'body': "The median is the 50th percentile of the sampled 'Blocks/sec' values. It represents the middle value of the performance data, meaning half of the speed samples were higher and half were lower. The median is often a more robust indicator of central tendency than the mean, as it is less affected by extreme outliers or brief performance spikes/dips."
     },
-    'Q3 Sync Speed (Blocks/sec sample)': {
-        'title': 'Q3/75th Percentile Sync Speed (Blocks/sec)',
+    'Q3 Sync Speed [Blocks/sec sample]': {
+        'title': 'Q3/75th Percentile Sync Speed [Blocks/sec]',
         'body': "The 75th percentile (or third quartile, Q3) is the value below which 75% of the synchronization speed samples fall. This metric highlights the performance level achieved during the faster sync periods. A high Q3 value indicates the node's capability to reach high speeds, but it should be considered alongside the median and mean to understand if this is a frequent or occasional event."
     },
-    'Max Sync Speed (Blocks/sec sample)': {
-        'title': 'Max Sync Speed (Blocks/sec Sampled)',
+    'Max Sync Speed [Blocks/sec sample]': {
+        'title': 'Max Sync Speed [Blocks/sec Sampled]',
         'body': "This metric captures the peak synchronization speed achieved between any two consecutive data points. High maximum values typically occur when the node receives a burst of blocks from a fast peer with low latency, often during periods where the blocks being processed are less computationally intensive."
     },
-    'Std Dev of Sync Speed (Blocks/sec sample)': {
-        'title': 'Std Dev of Sync Speed (Blocks/sec Sampled)',
+    'Std Dev of Sync Speed [Blocks/sec sample]': {
+        'title': 'Std Dev of Sync Speed [Blocks/sec Sampled]',
         'body': "The standard deviation measures the amount of variation or dispersion of the sampled 'Blocks/sec' values. A low standard deviation indicates that the sync speed was relatively consistent and stable. A high standard deviation suggests significant volatility in performance, with large fluctuations between fast and slow periods. This can be caused by inconsistent network conditions, varying peer quality, or changes in block complexity."
     },
-    'Skewness of Sync Speed (Blocks/sec sample)': {
-        'title': 'Skewness of Sync Speed (Blocks/sec Sampled)',
+    'Skewness of Sync Speed [Blocks/sec sample]': {
+        'title': 'Skewness of Sync Speed [Blocks/sec Sampled]',
         'body': "Skewness is a measure of the asymmetry of the performance data distribution.\n\n- A value near 0 indicates a roughly symmetrical distribution, where performance fluctuates evenly around the mean.\n- A positive value (right-skewed) suggests that the dataset has a long tail of high-speed values. This means the sync speed is often clustered at lower values with occasional bursts of very high speed.\n- A negative value (left-skewed) indicates a long tail of low-speed values. This typically means the sync speed is consistently high but is occasionally dragged down by periods of slowness."
     },
     'Moving Average Window': {
@@ -459,16 +456,16 @@ tooltip_texts = {
         'title': 'Block Height',
         'body': "The sequential number of a block in the blockchain. It represents a specific point in the history of the ledger. This table shows data sampled at various block heights."
     },
-    'Sync Time (s)': {
-        'title': 'Sync Time (seconds)',
+    'Sync Time [s]': {
+        'title': 'Sync Time [seconds]',
         'body': "The total accumulated time in seconds that the node has spent in an active synchronization state up to this specific block height. This is the raw, unformatted value."
     },
-    'Sync Time (Formatted)': {
-        'title': 'Sync Time (Formatted)',
-        'body': "A human-readable representation of the 'Sync Time (s)', formatted as Days-Hours:Minutes:Seconds. This makes it easier to understand longer synchronization durations."
+    'Sync Time [Formatted]': {
+        'title': 'Sync Time [Formatted]',
+        'body': "A human-readable representation of the 'Sync Time [s]', formatted as Days-Hours:Minutes:Seconds. This makes it easier to understand longer synchronization durations."
     },
-    'Sync Speed (Blocks/sec)': {
-        'title': 'Sync Speed (Blocks/sec Instantaneous)',
+    'Sync Speed [Blocks/sec]': {
+        'title': 'Sync Speed [Blocks/sec Instantaneous]',
         'body': "The instantaneous synchronization speed, calculated as the number of blocks processed since the last data point, divided by the time elapsed during that interval. This metric shows the node's performance at a specific moment and can fluctuate based on network conditions and block complexity."
     },
     'Save Filtered Range': {
@@ -482,6 +479,11 @@ tooltip_texts = {
     'Save As...': {
         'title': 'Save As...',
         'body': "Saves the current state of the data as a new CSV file in the `measurements/saved` directory. A timestamp and a unique sequence number will be appended to the filename to prevent overwriting previous saves. Use this to create a new version of the file while preserving the old one."
+    }
+,
+    'Distribution Bins': {
+        'title': 'Distribution Bins',
+        'body': "This slider controls the number of bins (columns) used to create the histograms in the distribution chart. A smaller number of bins provides a more general overview of the data distribution, while a larger number reveals more detail but can also appear more noisy. Adjust this to find the best representation for your data."
     }
 }
 
@@ -519,15 +521,15 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
         if df.empty or 'Blocks_per_Second' not in df.columns or len(df) < 2:
             na_result = {'display': 'N/A', 'raw': None}
             return {
-                'Total Sync in Progress Time': na_result, 'Total Blocks Synced': na_result, 'Overall Average Sync Speed (Blocks/sec)': na_result,
-                'Min Sync Speed (Blocks/sec sample)': na_result,
-                'Q1 Sync Speed (Blocks/sec sample)': na_result,
-                'Mean Sync Speed (Blocks/sec sample)': na_result,
-                'Median Sync Speed (Blocks/sec sample)': na_result,
-                'Q3 Sync Speed (Blocks/sec sample)': na_result,
-                'Max Sync Speed (Blocks/sec sample)': na_result,
-                'Std Dev of Sync Speed (Blocks/sec sample)': na_result,
-                'Skewness of Sync Speed (Blocks/sec sample)': na_result
+            'Total Sync in Progress Time [s]': na_result, 'Total Blocks Synced': na_result, 'Overall Average Sync Speed [Blocks/sec]': na_result,
+            'Min Sync Speed [Blocks/sec sample]': na_result,
+            'Q1 Sync Speed [Blocks/sec sample]': na_result,
+            'Mean Sync Speed [Blocks/sec sample]': na_result,
+            'Median Sync Speed [Blocks/sec sample]': na_result,
+            'Q3 Sync Speed [Blocks/sec sample]': na_result,
+            'Max Sync Speed [Blocks/sec sample]': na_result,
+            'Std Dev of Sync Speed [Blocks/sec sample]': na_result,
+            'Skewness of Sync Speed [Blocks/sec sample]': na_result
             }
 
         bps_series = df['Blocks_per_Second'].iloc[1:]
@@ -544,17 +546,17 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
         overall_avg_bps = total_blocks_synced / total_sync_seconds if total_sync_seconds > 0 else 0.0
 
         return {
-            'Total Sync in Progress Time': {'display': f"{format_seconds(total_sync_seconds)} ({int(total_sync_seconds)}s)", 'raw': total_sync_seconds},
+            'Total Sync in Progress Time [s]': {'display': f"{format_seconds(total_sync_seconds)} ({int(total_sync_seconds)}s)", 'raw': total_sync_seconds},
             'Total Blocks Synced': {'display': f"{total_blocks_synced:,}", 'raw': float(total_blocks_synced)},
-            'Overall Average Sync Speed (Blocks/sec)': {'display': f"{overall_avg_bps:.2f}", 'raw': overall_avg_bps},
-            'Min Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
-            'Q1 Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
-            'Mean Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
-            'Median Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
-            'Q3 Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
-            'Max Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
-            'Std Dev of Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
-            'Skewness of Sync Speed (Blocks/sec sample)': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0}
+            'Overall Average Sync Speed [Blocks/sec]': {'display': f"{overall_avg_bps:.2f}", 'raw': overall_avg_bps},
+        'Min Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
+        'Q1 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
+        'Mean Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
+        'Median Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
+        'Q3 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
+        'Max Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
+        'Std Dev of Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
+        'Skewness of Sync Speed [Blocks/sec sample]': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0}
         }
 
     has_original = not df_original.empty
@@ -565,11 +567,11 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     # Use a fixed list of metrics to ensure consistent order and display
     metric_names = [
-        'Total Sync in Progress Time', 'Total Blocks Synced', 'Overall Average Sync Speed (Blocks/sec)',
-        'Min Sync Speed (Blocks/sec sample)', 'Q1 Sync Speed (Blocks/sec sample)',
-        'Mean Sync Speed (Blocks/sec sample)', 'Median Sync Speed (Blocks/sec sample)',
-        'Q3 Sync Speed (Blocks/sec sample)', 'Max Sync Speed (Blocks/sec sample)',
-        'Std Dev of Sync Speed (Blocks/sec sample)', 'Skewness of Sync Speed (Blocks/sec sample)'
+        'Total Sync in Progress Time [s]', 'Total Blocks Synced', 'Overall Average Sync Speed [Blocks/sec]',
+        'Min Sync Speed [Blocks/sec sample]', 'Q1 Sync Speed [Blocks/sec sample]',
+        'Mean Sync Speed [Blocks/sec sample]', 'Median Sync Speed [Blocks/sec sample]',
+        'Q3 Sync Speed [Blocks/sec sample]', 'Max Sync Speed [Blocks/sec sample]',
+        'Std Dev of Sync Speed [Blocks/sec sample]', 'Skewness of Sync Speed [Blocks/sec sample]'
     ]
 
     header_cells = [html.Th("Metric")]
@@ -582,17 +584,17 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
     
     # Define which metrics are better when higher
     higher_is_better = {
-        'Total Sync in Progress Time': False,
+        'Total Sync in Progress Time [s]': False,
         'Total Blocks Synced': True,
-        'Overall Average Sync Speed (Blocks/sec)': True,
-        'Min Sync Speed (Blocks/sec sample)': True,
-        'Q1 Sync Speed (Blocks/sec sample)': True,
-        'Mean Sync Speed (Blocks/sec sample)': True,
-        'Median Sync Speed (Blocks/sec sample)': True,
-        'Q3 Sync Speed (Blocks/sec sample)': True,
-        'Max Sync Speed (Blocks/sec sample)': True,
-        'Std Dev of Sync Speed (Blocks/sec sample)': False,
-        'Skewness of Sync Speed (Blocks/sec sample)': 'closer_to_zero',
+        'Overall Average Sync Speed [Blocks/sec]': True,
+        'Min Sync Speed [Blocks/sec sample]': True,
+        'Q1 Sync Speed [Blocks/sec sample]': True,
+        'Mean Sync Speed [Blocks/sec sample]': True,
+        'Median Sync Speed [Blocks/sec sample]': True,
+        'Q3 Sync Speed [Blocks/sec sample]': True,
+        'Max Sync Speed [Blocks/sec sample]': True,
+        'Std Dev of Sync Speed [Blocks/sec sample]': False,
+        'Skewness of Sync Speed [Blocks/sec sample]': 'closer_to_zero',
     }
 
     table_body_rows = []
@@ -644,9 +646,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
                     elif is_better is False: color_class = "text-danger"
 
                     if color_class:
-                        if metric == 'Total Sync in Progress Time':
+                        if metric == 'Total Sync in Progress Time [s]':
                             sign = "+" if diff > 0 else "-"
-                            diff_str = f"{sign}{format_seconds(abs(diff))} ({sign}{int(abs(diff))}s)"
+                            diff_str = f"{sign}{format_seconds(abs(diff))} [{sign}{int(abs(diff))}s]"
                         else:
                             diff_str = f"{diff:+.2f}" if not isinstance(diff, str) else diff
                         original_cell_content.append(html.Span(f" ({diff_str})", className=f"small {color_class} fw-bold"))
@@ -690,9 +692,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
                 # Format difference string
                 if metric == 'Total Blocks Synced':
                     diff_str = f"{diff:+,}"
-                elif metric == 'Total Sync in Progress Time':
+                elif metric == 'Total Sync in Progress Time [s]':
                     sign = "+" if diff > 0 else "-"
-                    diff_str = f"{sign}{format_seconds(abs(diff))} ({sign}{int(abs(diff))}s)"
+                    diff_str = f"{sign}{format_seconds(abs(diff))} [{sign}{int(abs(diff))}s]"
                 else:
                     diff_str = f"{diff:+.2f}"
 
@@ -742,6 +744,10 @@ def process_progress_df(df, filename=""):
 # --- Moving Average Window Values ---
 ma_windows = [10, 100, 200, 300, 400, 500]
 ma_marks = {i: str(v) for i, v in enumerate(ma_windows)}
+
+# --- Distribution Bins Values ---
+dist_bins_values = [10, 100, 200, 300, 400, 500]
+dist_bins_marks = {i: str(v) for i, v in enumerate(dist_bins_values)}
 
 
 # --- Dash App Initialization ---
@@ -856,28 +862,18 @@ app.layout = html.Div([
     ]),
     html.Div([
         dcc.Graph(id="progress-graph", className="my-4"),
+        dcc.Graph(id="blockheight-vs-speed-graph", className="my-4"),
         html.Div([
-            html.Label("Moving Average Window:", style={'marginRight': '5px'}),
-            html.Span([ # type: ignore
-                "\u00A0",  # Non-breaking space
-                html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-            ],
-            id={'type': 'info-icon', 'metric': 'Moving Average Window'},
-            style={'cursor': 'pointer', 'marginRight': '10px'},
-            title='Click for more info',
-            n_clicks=0
-            ), # type: ignore
-            html.Div(
-                dcc.Slider( # type: ignore
-                    id="ma-window-slider-progress",
-                    min=0,
-                    max=len(ma_windows) - 1,
-                    value=1, # Default to 100
-                    marks=ma_marks,
-                    step=None,
-                ), style={'width': '200px'}
-            )
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}, id="ma-slider-container"),
+            html.Label("Moving Average Window:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="ma-window-slider-progress", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
+        ], id="ma-slider-container", style={'display': 'flex', 'alignItems': 'flex-start', 'marginTop': '20px'}),
+        dcc.Graph(id="distribution-graph", className="my-4"),
+        html.Div([
+            html.Label("Distribution Bins:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="distribution-bins-slider", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
+        ], id="distribution-bins-slider-container", style={'display': 'flex', 'alignItems': 'flex-start', 'marginTop': '20px'}),
         html.Div(id="total-time-display-container"),
         html.Hr(),
         html.H3("Raw Data View", className="mt-4"),
@@ -1263,6 +1259,8 @@ def reload_compare_data(n_clicks, store_data):
 # --- Callback to Update Progress Graph ---
 @app.callback(
     [Output("progress-graph", "figure"),
+     Output("blockheight-vs-speed-graph", "figure"),
+     Output("distribution-graph", "figure"),
      Output("total-time-display-container", "children"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
@@ -1272,7 +1270,8 @@ def reload_compare_data(n_clicks, store_data):
      Output("data-table-container", "children"),
      Output("data-table-container", "style"),
     ],
-    [Input("ma-window-slider-progress", "value"),
+    [Input("ma-window-slider-progress", "value"), # 0
+     Input("distribution-bins-slider", "value"),
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
      Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
@@ -1281,7 +1280,7 @@ def reload_compare_data(n_clicks, store_data):
      Input('show-data-table-switch', 'value'),
      Input('theme-store', 'data')],
 )
-def update_progress_graph_and_time(window_index, original_data, compare_data,
+def update_progress_graph_and_time(window_index, bins_index, original_data, compare_data,
                                    start_block_vals, end_block_vals, reset_clicks,
                                    show_data_table, theme):
     window = ma_windows[window_index]
@@ -1300,13 +1299,13 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
 
     # --- Map inputs to prefixes ---
     # The order of inputs is: ma-slider, original-data, compare-data, start-block-vals, end-block-vals, ...
-    start_block_inputs = {}
-    if ctx.inputs_list[3]:
-        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[3]}
-
-    end_block_inputs = {}
+    start_block_inputs = {} # start-block-dropdown values
     if ctx.inputs_list[4]:
-        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]}
+        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]}
+
+    end_block_inputs = {} # end-block-dropdown values
+    if ctx.inputs_list[5]:
+        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[5]}
 
  
     def create_header_with_tooltip(text, metric_id, style=None):
@@ -1324,6 +1323,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
 
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+
 
     # --- Load and process data from stores ---
     df_progress_local = pd.DataFrame()
@@ -1353,15 +1353,14 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
         summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
         
         # Correctly form empty outputs for pattern-matching callbacks
-        num_start_dds = len(ctx.outputs_list[2])
-        num_end_dds = len(ctx.outputs_list[4])
-        
+        num_start_dds = len(ctx.outputs_grouping[4]) if 4 < len(ctx.outputs_grouping) else 0
+        num_end_dds = len(ctx.outputs_grouping[6]) if 6 < len(ctx.outputs_grouping) else 0
         empty_start_opts = [[] for _ in range(num_start_dds)]
         empty_start_vals = [None for _ in range(num_start_dds)]
         empty_end_opts = [[] for _ in range(num_end_dds)]
         empty_end_vals = [None for _ in range(num_end_dds)]
 
-        return empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
+        return empty_fig, empty_fig, empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
@@ -1429,7 +1428,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                 hovertemplate=(
                     f'<b>File</b>: {original_filename}<br>' +
                     '<b>Block Height</b>: %{y}<br>' +
-                    '<b>Sync Time</b>: %{customdata[0]} (%{x:.0f}s)' +
+                    '<b>Sync Time</b>: %{customdata[0]} [%{x:.0f}s]' +
                     '<extra></extra>'
                 )
             ),
@@ -1440,8 +1439,8 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                 x=df_original_display['Accumulated_sync_in_progress_time[s]'],
                 y=df_original_display['Blocks_per_Second'],
                 name='Sync Speed (Original)',
-                line=dict(color=original_bps_color, dash='dot', width=1),
-                hovertemplate='<b>Sync Speed</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
+                line=dict(color=original_bps_color, dash='dot', width=1), # type: ignore
+                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
             ),
             secondary_y=True,
         )
@@ -1450,8 +1449,8 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                 x=df_original_display['Accumulated_sync_in_progress_time[s]'],
                 y=df_original_display['BPS_ma'],
                 name='Sync Speed (MA) (Original)',
-                line=dict(color=original_ma_color, dash='solid'),
-                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
+                line=dict(color=original_ma_color, dash='solid'), # type: ignore
+                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
             ),
             secondary_y=True,
         )
@@ -1469,7 +1468,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     hovertemplate=(
                         f'<b>File</b>: {compare_filename}<br>' +
                         '<b>Block Height</b>: %{y}<br>' +
-                        '<b>Sync Time</b>: %{customdata[0]} (%{x:.0f}s)' +
+                        '<b>Sync Time</b>: %{customdata[0]} [%{x:.0f}s]' +
                         '<extra></extra>'
                     )
                 ),
@@ -1481,7 +1480,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     y=df_compare_display['Blocks_per_Second'],
                     name='Sync Speed (Comparison)',
                     line=dict(color='fuchsia', dash='dot', width=1),
-                    hovertemplate='<b>Sync Speed</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
+                    hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
                 ),
                 secondary_y=True,
             )
@@ -1491,15 +1490,207 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     y=df_compare_display['BPS_ma'],
                     name='Sync Speed (MA) (Comparison)',
                     line=dict(color='magenta', dash='solid'),
-                    hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
+                    hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
                 ),
                 secondary_y=True,
             )
+    # --- Define graph template before using it ---
+    graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
+        
+    # Create the second figure for Block Height vs. Sync Speed/Time
+    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Plot Original Data for fig2
+    if not df_original_display.empty:
+        fig2.add_trace(
+            go.Scatter(
+                x=df_original_display['Block_height'],
+                y=df_original_display['Accumulated_sync_in_progress_time[s]'],
+                name='Sync Time (Original)',
+                line=dict(color='#1f77b4'),
+                customdata=df_original_display[['SyncTime_Formatted']],
+                hovertemplate=(
+                    f'<b>File</b>: {original_filename}<br>' +
+                    '<b>Block Height</b>: %{x}<br>' +
+                    '<b>Sync Time</b>: %{customdata[0]} [%{y:.0f}s]' +
+                    '<extra></extra>'
+                )
+            ),
+            secondary_y=False,
+        )
+        fig2.add_trace(
+            go.Scatter(
+                x=df_original_display['Block_height'],
+                y=df_original_display['Blocks_per_Second'],
+                name='Sync Speed (Original)',
+                line=dict(color=original_bps_color, dash='dot', width=1),
+                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+            ),
+            secondary_y=True,
+        )
+        fig2.add_trace(
+            go.Scatter(
+                x=df_original_display['Block_height'],
+                y=df_original_display['BPS_ma'],
+                name='Sync Speed (MA) (Original)',
+                line=dict(color=original_ma_color, dash='solid'),
+                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+            ),
+            secondary_y=True,
+        )
+
+    # Plot Comparison Data for fig2 if available
+    if not df_compare_display.empty:
+        fig2.add_trace(
+            go.Scatter(
+                x=df_compare_display['Block_height'],
+                y=df_compare_display['Accumulated_sync_in_progress_time[s]'],
+                name='Sync Time (Comparison)',
+                line=dict(color='cyan'),
+                customdata=df_compare_display[['SyncTime_Formatted']],
+                hovertemplate=(
+                    f'<b>File</b>: {compare_filename}<br>' +
+                    '<b>Block Height</b>: %{x}<br>' +
+                    '<b>Sync Time</b>: %{customdata[0]} [%{y:.0f}s]' +
+                    '<extra></extra>'
+                )
+            ),
+            secondary_y=False,
+        )
+        fig2.add_trace(
+            go.Scatter(
+                x=df_compare_display['Block_height'],
+                y=df_compare_display['Blocks_per_Second'],
+                name='Sync Speed (Comparison)',
+                line=dict(color='fuchsia', dash='dot', width=1),
+                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+            ),
+            secondary_y=True,
+        )
+        fig2.add_trace(
+            go.Scatter(
+                x=df_compare_display['Block_height'],
+                y=df_compare_display['BPS_ma'],
+                name='Sync Speed (MA) (Comparison)',
+                line=dict(color='magenta', dash='solid'),
+                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+            ),
+            secondary_y=True,
+        )
+
+    # Update layout for fig2
+    fig2.update_layout(
+        title_text=f'Sync Time and Sync Speed vs. Block Height (MA Window: {window})',
+        height=600,
+        hovermode='x unified', hoverlabel=hover_label_style,
+        xaxis_title="<b>Block Height</b>",
+        yaxis_title="<b>Sync in Progress Time [s]</b>",
+        yaxis2_title="<b>Sync Speed [Blocks/sec]</b>",
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0),
+        template=graph_template,
+        margin=dict(l=80, r=80, t=80, b=80),
+        **background_style
+    )
+
+    # --- Distribution Graph ---
+    bins = dist_bins_values[bins_index]
+    fig3 = make_subplots(rows=1, cols=2, subplot_titles=('Sync Speed Distribution', 'Sync Time Delta Distribution'))
+
+    def add_distribution_trace(fig, df, col, name, color, row, col_num, legend_name):
+        if not df.empty and col in df.columns:
+            data = df[col].dropna()
+            if len(data) > 1:
+                # Histogram
+                fig.add_trace(go.Histogram(
+                    x=data,
+                    name=f'{name} (Histogram)',
+                    marker_color=color,
+                    opacity=0.6,
+                    nbinsx=bins,
+                    histnorm='probability density',
+                    hovertemplate='<b>Range</b>: %{x}<br><b>Density</b>: %{y}<extra></extra>',
+                    showlegend=True, # Show this trace in the legend
+                    legend=legend_name
+                ), row=row, col=col_num)
+
+                # KDE Curve
+                try:
+                    kde = gaussian_kde(data)
+                    x_range = np.linspace(data.min(), data.max(), 500)
+                    kde_values = kde(x_range)
+                    fig.add_trace(go.Scatter(
+                        x=x_range,
+                        y=kde_values,
+                        mode='lines',
+                        name=f'{name} (KDE)',
+                        hovertemplate='<b>Value</b>: %{x:.2f}<br><b>Density</b>: %{y:.4f}<extra></extra>',
+                        line=dict(color=color, width=2),
+                        showlegend=True,
+                        legend=legend_name
+                    ), row=row, col=col_num)
+                except Exception as e:
+                    print(f"Could not generate KDE for {name} - {col}: {e}")
+
+    # Sync Speed Distribution
+    add_distribution_trace(fig3, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, 1, 1, 'legend1')
+    if not df_compare_display.empty:
+        add_distribution_trace(fig3, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', 1, 1, 'legend1')
+
+    # Sync Time Delta Distribution
+    if not df_original_display.empty:
+        time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
+        if len(time_delta_orig) > 1:
+            add_distribution_trace(fig3, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, 1, 2, 'legend2')
+
+    if not df_compare_display.empty:
+        time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
+        if len(time_delta_comp) > 1:
+            add_distribution_trace(fig3, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', 1, 2, 'legend2')
+
+    fig3.update_layout(
+        title_text=f'Data Distribution (Bins: {bins})',
+        height=500,
+        bargap=0.1,
+        template=graph_template,
+        legend1=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
+        legend2=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="right", x=1),
+        hovermode='x unified',
+        hoverlabel=hover_label_style,
+        **background_style
+    )
+    fig3.update_xaxes(title_text="Sync Speed [Blocks/sec]", row=1, col=1)
+    fig3.update_yaxes(title_text="Density", row=1, col=1)
+    fig3.update_xaxes(title_text="Time Between Samples [s]", row=1, col=2)
+    fig3.update_yaxes(title_text="Density", row=1, col=2)
+
+    # If only one dataset, hide the legend for the distribution plot
+    if df_compare_display.empty:
+        fig3.update_layout(showlegend=False)
+
+
+    # --- Update Y-Axes for fig2 with specific colors for clarity ---
+    fig2.update_yaxes(
+        title_text="<b>Sync in Progress Time [s]</b>",
+        secondary_y=False,
+        color="#1f77b4",
+        linecolor="#1f77b4",
+        gridcolor='rgba(28, 119, 180, 0.3)',
+        gridwidth=1,
+        showgrid=True
+    )
+    fig2.update_yaxes(
+        title_text="<b>Sync Speed [Blocks/sec]</b>",
+        secondary_y=True,
+        color=original_bps_color,
+        linecolor=original_bps_color,
+        gridcolor=f'rgba({int(original_bps_color[1:3], 16)}, {int(original_bps_color[3:5], 16)}, {int(original_bps_color[5:7], 16)}, 0.3)',
+        gridwidth=1,
+        showgrid=True
+    )
 
     # Update layout and axes
-    graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
     fig.update_layout(
-        title_text=f'Block Height vs. Sync Time (MA Window: {window})',
+        title_text=f'Block Height and Sync Speed vs. Sync Time (MA Window: {window})',
         height=600,
         hovermode='x unified', hoverlabel=hover_label_style,
         xaxis_showspikes=True, xaxis_spikemode='across', xaxis_spikedash='dot',
@@ -1512,7 +1703,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                     itemclick='toggle',
                     itemdoubleclick='toggleothers'),
         template=graph_template,
-        margin=dict(l=80, r=0, t=80, b=80),
+        margin=dict(l=80, r=80, t=80, b=80),
         yaxis2=dict(
             side='right',
             overlaying='y',
@@ -1525,7 +1716,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
         **background_style
     )
     # --- Update Y-Axes with specific colors for clarity ---
-    # Primary Y-axis (Block Height) - uses default color (blue/cyan)
+    # Primary Y-axis [Block Height] - uses default color (blue/cyan)
     fig.update_yaxes(
         title_text="<b>Block Height</b>",
         secondary_y=False,
@@ -1537,7 +1728,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
     )
     # Secondary Y-axis (Sync Speed) - uses orange color to match its traces
     fig.update_yaxes(
-        title_text="<b>Sync Speed (Blocks/sec)</b>",
+        title_text="<b>Sync Speed [Blocks/sec]</b>",
         secondary_y=True,
         color=original_bps_color, # Sets tick and title font color
         linecolor=original_bps_color, # Sets axis line color
@@ -1566,10 +1757,10 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
 
     # --- Prepare outputs for dropdowns ---
     # The order of outputs is determined by Dash. We can get it from ctx.outputs_list.
-    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[2]]
-    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_list[3]]
-    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[4]]
-    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_list[5]]
+    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[4]]
+    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_grouping[5]]
+    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[6]]
+    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_grouping[7]]
 
     # --- Update total time display and metrics tables ---
     table_title_original = f"Original: {original_filename}"
@@ -1587,9 +1778,9 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
     if show_data_table:
         table_style = {'display': 'block'}
         data_col_names = {
-            'Accumulated_sync_in_progress_time[s]': 'Sync Time (s)',
-            'SyncTime_Formatted': 'Sync Time (Formatted)',
-            'Blocks_per_Second': 'Sync Speed (Blocks/sec)'
+            'Accumulated_sync_in_progress_time[s]': 'Sync Time [s]',
+            'SyncTime_Formatted': 'Sync Time [Formatted]',
+            'Blocks_per_Second': 'Sync Speed [Blocks/sec]'
         }
         cols_to_show = ['Block_height'] + list(data_col_names.keys())
 
@@ -1646,8 +1837,8 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                 row_data = [html.Td(f"{int(row['Block Height']):,}" if pd.notna(row['Block Height']) else "")]
                 
                 numeric_metrics_info = {
-                    'Sync Time (s)': {'higher_is_better': False},
-                    'Sync Speed (Blocks/sec)': {'higher_is_better': True}
+                    'Sync Time [s]': {'higher_is_better': False},
+                    'Sync Speed [Blocks/sec]': {'higher_is_better': True}
                 }
 
                 # Add original columns' cells
@@ -1670,14 +1861,14 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
-                                if display_name == 'Sync Time (s)':
+                                if display_name == 'Sync Time [s]':
                                     diff_str = f" ({diff:+.2f}s)"
                                 else:
                                     diff_str = f" ({diff:+.2f})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
-                    elif display_name == 'Sync Time (Formatted)':
-                        orig_s_val = row.get('Sync Time (s)_orig')
-                        comp_s_val = row.get('Sync Time (s)_comp')
+                    elif display_name == 'Sync Time [Formatted]':
+                        orig_s_val = row.get('Sync Time [s]_orig')
+                        comp_s_val = row.get('Sync Time [s]_comp')
                         if pd.notna(orig_s_val) and pd.notna(comp_s_val):
                             diff = orig_s_val - comp_s_val
                             color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
@@ -1709,14 +1900,14 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
-                                if display_name == 'Sync Time (s)':
+                                if display_name == 'Sync Time [s]':
                                     diff_str = f" ({diff:+.2f}s)"
                                 else:
                                     diff_str = f" ({diff:+.2f})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
-                    elif display_name == 'Sync Time (Formatted)':
-                        orig_s_val = row.get('Sync Time (s)_orig')
-                        comp_s_val = row.get('Sync Time (s)_comp')
+                    elif display_name == 'Sync Time [Formatted]':
+                        orig_s_val = row.get('Sync Time [s]_orig')
+                        comp_s_val = row.get('Sync Time [s]_comp')
                         if pd.notna(orig_s_val) and pd.notna(comp_s_val):
                             diff = comp_s_val - orig_s_val
                             color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
@@ -1818,7 +2009,7 @@ def update_progress_graph_and_time(window_index, original_data, compare_data,
         else:
             table_children = [html.P("No data to display in table.")]
 
-    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
+    return fig, fig2, fig3, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
 
 @app.callback(
     Output('action-feedback-store', 'data', allow_duplicate=True),
@@ -2060,7 +2251,7 @@ def write_csv_new(store_data, filter_range, start_block, end_block):
     
     # Save to a new file
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
         os.makedirs(saved_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         base_filename = os.path.basename(filename)
@@ -2127,7 +2318,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
     df.to_csv(output, sep=';', index=False)
 
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
         os.makedirs(saved_dir, exist_ok=True)
         base_filename = os.path.basename(filename)
         base, ext = os.path.splitext(base_filename)
@@ -2493,7 +2684,7 @@ app.clientside_callback(
 # --- Callbacks for saving HTML report ---
 app.clientside_callback(
     """
-    async function(n_clicks, slider_value_index, figure) {
+    async function(n_clicks, slider_value_index, progress_figure, blockheight_figure, distribution_figure) {
         if (!n_clicks) {
             // This is the initial call or a callback update where the button wasn't clicked.
             return [window.dash_clientside.no_update, window.dash_clientside.no_update];
@@ -2612,88 +2803,79 @@ app.clientside_callback(
                 if (parentRow) parentRow.remove();
             });
 
-            // --- Convert Plotly graph to a static image ---
-            const graphDiv = clone.querySelector('#progress-graph');
-            const originalGraphDiv = document.getElementById('progress-graph');
+            // --- Convert all Plotly graphs to static images ---
+            const graphsToConvert = [
+                { id: 'progress-graph', figure: progress_figure },
+                { id: 'blockheight-vs-speed-graph', figure: blockheight_figure },
+                { id: 'distribution-graph', figure: distribution_figure }
+            ];
 
-            if (graphDiv && originalGraphDiv && window.Plotly && figure) {
-                const tempDiv = document.createElement('div');
-                // Position it off-screen
-                tempDiv.style.position = 'absolute';
-                tempDiv.style.left = '-9999px';
-                tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
-                tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
-                document.body.appendChild(tempDiv);
+            for (const graphInfo of graphsToConvert) {
+                const graphDiv = clone.querySelector(`#${graphInfo.id}`);
+                const originalGraphDiv = document.getElementById(graphInfo.id);
 
-                try {
-                    const data = JSON.parse(JSON.stringify(figure.data));
-                    const layout = JSON.parse(JSON.stringify(figure.layout));
+                if (graphDiv && originalGraphDiv && window.Plotly && graphInfo.figure) {
+                    const tempDiv = document.createElement('div');
+                    // Position it off-screen
+                    tempDiv.style.position = 'absolute';
+                    tempDiv.style.left = '-9999px';
+                    tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
+                    tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
+                    document.body.appendChild(tempDiv);
 
-                    if (isDarkTheme) {
-                        layout.paper_bgcolor = '#222529'; // Darkly theme background
-                        layout.plot_bgcolor = '#222529';
+                    try {
+                        const data = JSON.parse(JSON.stringify(graphInfo.figure.data));
+                        const layout = JSON.parse(JSON.stringify(graphInfo.figure.layout));
+
+                        if (isDarkTheme) {
+                            layout.paper_bgcolor = '#222529'; // Darkly theme background
+                            layout.plot_bgcolor = '#222529';
+                        }
+
+                        // Increase font sizes for better readability in the saved image
+                        const fontSizeIncrease = 6; // Increase font size by 6 points
+                        if (layout.title) {
+                            layout.title.font = layout.title.font || {};
+                            layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
+                        }
+                        ['xaxis', 'yaxis', 'yaxis2'].forEach(axis => {
+                            if (layout[axis]) {
+                                layout[axis].title = layout[axis].title || {};
+                                layout[axis].title.font = layout[axis].title.font || {};
+                                layout[axis].title.font.size = (layout[axis].title.font.size || 12) + fontSizeIncrease + 2;
+                                layout[axis].tickfont = layout[axis].tickfont || {};
+                                layout[axis].tickfont.size = (layout[axis].tickfont.size || 12) + fontSizeIncrease;
+                            }
+                        });
+                        if (layout.legend) {
+                            layout.legend.font = layout.legend.font || {};
+                            layout.legend.font.size = (layout.legend.font.size || 10) + fontSizeIncrease + 2;
+                        }
+
+                        await window.Plotly.newPlot(tempDiv, data, layout, {displayModeBar: false});
+
+                        const dataUrl = await window.Plotly.toImage(tempDiv, {
+                            format: 'png',
+                            height: originalGraphDiv.offsetHeight * 1.5,
+                            width: originalGraphDiv.offsetWidth * 1.5,
+                            scale: 2
+                        });
+
+                        const img = document.createElement('img');
+                        img.src = dataUrl;
+                        img.style.width = '100%';
+                        img.style.height = 'auto';
+                        graphDiv.parentNode.replaceChild(img, graphDiv);
+                    } catch (e) {
+                        console.error(`Plotly.toImage failed for ${graphInfo.id}:`, e);
+                        const p = document.createElement('p');
+                        p.innerText = '[Error converting chart to image]';
+                        p.style.color = 'red';
+                        graphDiv.parentNode.replaceChild(p, graphDiv);
+                    } finally {
+                        document.body.removeChild(tempDiv);
                     }
-
-                    // Increase font sizes for better readability in the saved image
-                    const fontSizeIncrease = 6; // Increase font size by 6 points
-                    if (layout.title) {
-                        layout.title.font = layout.title.font || {};
-                        layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
-                    }
-                    if (layout.xaxis) {
-                        layout.xaxis.title = layout.xaxis.title || {};
-                        layout.xaxis.title.font = layout.xaxis.title.font || {};
-                        layout.xaxis.title.font.size = (layout.xaxis.title.font.size || 12) + fontSizeIncrease + 2; // Axis titles a bit larger
-                        layout.xaxis.tickfont = layout.xaxis.tickfont || {};
-                        layout.xaxis.tickfont.size = (layout.xaxis.tickfont.size || 12) + fontSizeIncrease;
-                    }
-                    if (layout.yaxis) {
-                        layout.yaxis.title = layout.yaxis.title || {};
-                        layout.yaxis.title.font = layout.yaxis.title.font || {};
-                        layout.yaxis.title.font.size = (layout.yaxis.title.font.size || 12) + fontSizeIncrease + 2;
-                        layout.yaxis.tickfont = layout.yaxis.tickfont || {};
-                        layout.yaxis.tickfont.size = (layout.yaxis.tickfont.size || 12) + fontSizeIncrease;
-                    }
-                    if (layout.yaxis2) {
-                        layout.yaxis2.title = layout.yaxis2.title || {};
-                        layout.yaxis2.title.font = layout.yaxis2.title.font || {};
-                        layout.yaxis2.title.font.size = (layout.yaxis2.title.font.size || 12) + fontSizeIncrease + 2;
-                        layout.yaxis2.tickfont = layout.yaxis2.tickfont || {};
-                        layout.yaxis2.tickfont.size = (layout.yaxis2.tickfont.size || 12) + fontSizeIncrease;
-                    }
-                    if (layout.legend) {
-                        layout.legend.font = layout.legend.font || {};
-                        layout.legend.font.size = (layout.legend.font.size || 10) + fontSizeIncrease + 2;
-                    }
-
-                    await window.Plotly.newPlot(tempDiv, data, layout);
-
-                    const renderWidth = originalGraphDiv.offsetWidth * 1.4;
-                    const renderHeight = originalGraphDiv.offsetHeight * 1.4;
-
-                    const dataUrl = await window.Plotly.toImage(tempDiv, {
-                        format: 'png',
-                        height: renderHeight,
-                        width: renderWidth,
-                        scale: 2 // 1.4x base size with 2x scale gives a sharp 2.8x total resolution
-                    });
-
-                    const img = document.createElement('img');
-                    img.src = dataUrl;
-                    img.style.width = '100%'; // Fit the image to its container
-                    img.style.height = 'auto';
-                    graphDiv.parentNode.replaceChild(img, graphDiv);
-                } catch (e) {
-                    console.error('Plotly.toImage failed:', e);
-                    const p = document.createElement('p');
-                    p.innerText = '[Error converting chart to image]';
-                    p.style.color = 'red';
-                    graphDiv.parentNode.replaceChild(p, graphDiv);
-                } finally {
-                    document.body.removeChild(tempDiv);
-                }
-            } else if (graphDiv && graphDiv.parentNode) {
-                if (graphDiv && graphDiv.parentNode) {
+                } else if (graphDiv && graphDiv.parentNode) {
                     const p = document.createElement('p');
                     p.innerText = '[Chart not included in this report version.]';
                     graphDiv.parentNode.replaceChild(p, graphDiv);
@@ -2744,7 +2926,9 @@ app.clientside_callback(
      Output('save-callback-output', 'figure', allow_duplicate=True)],
     Input('save-button', 'n_clicks'),
     [State('ma-window-slider-progress', 'value'),
-     State('progress-graph', 'figure')],
+     State('progress-graph', 'figure'),
+     State('blockheight-vs-speed-graph', 'figure'),
+     State('distribution-graph', 'figure')],
     prevent_initial_call=True
 )
 
