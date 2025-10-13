@@ -576,9 +576,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     header_cells = [html.Th("Metric")]
     if has_original:
-        header_cells.append(html.Th(title_original, style={'word-break': 'break-all'}))
+        header_cells.append(html.Th(title_original, style={'wordBreak': 'break-all'}))
     if has_comparison:
-        header_cells.append(html.Th(title_compare, style={'word-break': 'break-all'}))
+        header_cells.append(html.Th(title_compare, style={'wordBreak': 'break-all'}))
 
     table_header = [html.Thead(html.Tr(header_cells))]
     
