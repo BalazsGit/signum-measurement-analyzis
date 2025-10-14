@@ -1572,10 +1572,11 @@ def reload_original_data(n_clicks, store_data, unsaved_data):
      Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('reload-compare-button', 'n_clicks'),
-    State('compare-data-store', 'data'),
+    [State('compare-data-store', 'data'),
+     State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
 )
-def reload_compare_data(n_clicks, store_data):
+def reload_compare_data(n_clicks, store_data, unsaved_data):
     if not n_clicks or not store_data or not store_data.get('filename'):
         raise dash.exceptions.PreventUpdate
     
@@ -1595,10 +1596,9 @@ def reload_compare_data(n_clicks, store_data):
     if new_store_data:
         new_store_data['filename'] = filepath
         # Since we are reloading, this file is now considered "saved"
-        # We need to read the current state of unsaved changes and update it.
-        current_unsaved = dash.callback_context.states['unsaved-changes-store.data']
-        current_unsaved['Comparison'] = False
-        return new_store_data, feedback, current_unsaved
+        new_unsaved_data = unsaved_data.copy()
+        new_unsaved_data['Comparison'] = False
+        return new_store_data, feedback, new_unsaved_data
     else:
         return dash.no_update, feedback, dash.no_update
 
