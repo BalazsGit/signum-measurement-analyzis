@@ -1515,6 +1515,20 @@ app.layout = html.Div([
                 className="custom-checklist mt-2 mb-2"
             ),
         ], style={'display': 'none'}), # Initially hidden
+        html.Div(id='raw-data-visibility-controls-container', children=[
+            dbc.Row([
+                dbc.Col(dbc.Switch(
+                    id='show-original-cols-switch',
+                    label="Show Original Columns",
+                    value=True,
+                ), id='show-original-cols-container', style={'display': 'none'}, width='auto'),
+                dbc.Col(dbc.Switch(
+                    id='show-compare-cols-switch',
+                    label="Show Comparison Columns",
+                    value=True,
+                ), id='show-compare-cols-container', style={'display': 'none'}, width='auto'),
+            ], className="mt-2")
+        ], style={'display': 'none'}),
         html.Div(id='data-table-container'),
     ]),
 
@@ -1899,32 +1913,37 @@ def reload_compare_data(n_clicks, store_data):
      Output("custom-legend-container", "children"),
      Output("raw-data-controls-container", "style"),
      Output("click-position-store", "data", allow_duplicate=True),
+     Output('show-original-cols-container', 'style'),
+     Output('show-compare-cols-container', 'style'),
+     Output('raw-data-visibility-controls-container', 'style'),
      Output("legend-value-store", "data", allow_duplicate=True),
      Output("x-values-store", "data"), # New output for x-values
      Output("clear-cursor-button", "style"),
     ],
     [Input('sort-state-store', 'data'),
-     Input("ma-window-slider-progress", "value"),
+     Input("ma-window-slider-progress", "value"), # 1
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
-     Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
+     Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'), # 4
      Input({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
      Input({'type': 'reset-view-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input('show-data-table-switch', 'value'),
-     Input({'type': 'custom-legend-item', 'trace': dash.dependencies.ALL}, 'n_clicks'),
+     Input({'type': 'custom-legend-item', 'trace': dash.dependencies.ALL}, 'n_clicks'), # 8
      Input('legend-value-store', 'data'), # Listen to hover value updates
-     Input('click-position-store', 'data'), # New Input
      Input('clear-cursor-button', 'n_clicks'), # New Input
      Input('raw-data-column-checklist', 'value'),
-     Input('theme-store', 'data'),
-     Input('progress-graph', 'restyleData')],
+     Input('theme-store', 'data'), # 12
+     Input('click-position-store', 'data'), # New Input
+     Input('show-original-cols-switch', 'value'),
+     Input('show-compare-cols-switch', 'value'),
+     Input('progress-graph', 'restyleData')], # 16
     [State('progress-graph', 'figure')],
     prevent_initial_call=True
 )
 def update_progress_graph_and_time(sort_state, window_index, original_data, compare_data, # type: ignore
-                                   start_block_vals, end_block_vals, reset_clicks, show_data_table, # type: ignore
-                                   legend_clicks, legend_values, click_position, clear_cursor_clicks,
-                                   selected_columns, theme, restyle_data, existing_figure):
+                                   start_block_vals, end_block_vals, reset_clicks, show_data_table,
+                                   legend_clicks, legend_values, clear_cursor_clicks, selected_columns, theme, click_position,
+                                   show_original_cols, show_compare_cols, restyle_data, existing_figure):
     loading_message = {'loading': True, 'message': 'Processing data and generating graphs...'}
     
     ctx = dash.callback_context
@@ -1942,9 +1961,10 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
         num_start_dropdowns = len(ctx.outputs_list[2])
         num_end_dropdowns = len(ctx.outputs_list[4])
 
-        return (dash.no_update, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns,
-                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, custom_legend, dash.no_update,
-                dash.no_update, dash.no_update, dash.no_update, dash.no_update)
+        return (dash.no_update, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns, # type: ignore
+                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, custom_legend, dash.no_update, # type: ignore
+                dash.no_update, dash.no_update, dash.no_update, dash.no_update, # type: ignore
+                dash.no_update, dash.no_update, dash.no_update)
     if triggered_id and isinstance(triggered_id, dict) and triggered_id.get('type') == 'custom-legend-item':
         if not existing_figure or not existing_figure.get('data'):
             raise dash.exceptions.PreventUpdate
@@ -1974,9 +1994,10 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
         num_start_dropdowns = len(ctx.outputs_list[2])
         num_end_dropdowns = len(ctx.outputs_list[4])
 
-        return (existing_figure, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns,
-                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, custom_legend, dash.no_update,
-                dash.no_update, dash.no_update, dash.no_update, dash.no_update)
+        return (existing_figure, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns, # type: ignore
+                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, custom_legend, dash.no_update, # type: ignore
+                dash.no_update, dash.no_update, dash.no_update, dash.no_update, # type: ignore
+                dash.no_update, dash.no_update, dash.no_update)
     
     # --- Define colors based on theme ---
     is_dark_theme = theme != 'light'
@@ -1994,12 +2015,11 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
     if triggered_id == 'clear-cursor-button':
         if existing_figure:
             existing_figure['layout']['shapes'] = []
-        # Must return a value for every output
-        return existing_figure, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, None, dash.no_update, dash.no_update, {'display': 'none'}
+        return (existing_figure, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, None, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, {'display': 'none'})
 
     # --- Handle native Plotly legend click (restyleData) ---
     if ctx.triggered_id == 'progress-graph' and restyle_data and existing_figure:
-        # restyle_data is a list: [{'visible': ['legendonly']}, [trace_index]]
+        # restyle_data is a list: [{'visible': ['legendonly']}, [trace_index]] # type: ignore
         update_spec, trace_indices = restyle_data
         
         if 'visible' in update_spec:
@@ -2015,8 +2035,8 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
         num_start_dropdowns = len(ctx.outputs_list[2])
         num_end_dropdowns = len(ctx.outputs_list[4])
         
-        return (existing_figure, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns, 
-                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update) # type: ignore
+        return (existing_figure, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns, # type: ignore
+                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update)
 
     # --- Map inputs to prefixes ---
     # The order of inputs is: ma-slider, original-data, compare-data, start-block-vals, end-block-vals, ...
@@ -2098,7 +2118,7 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
         empty_start_vals = [None for _ in range(num_start_dds)]
         empty_end_opts = [[] for _ in range(num_end_dds)]
         empty_end_vals = [None for _ in range(num_end_dds)] # type: ignore
-        return empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}, None, {'display': 'none'}, dash.no_update, dash.no_update, None, {'display': 'none'} # type: ignore
+        return empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}, None, {'display': 'none'}, dash.no_update, {'display': 'none'}, {'display': 'none'}, {'display': 'none'}, dash.no_update, None, {'display': 'none'} # type: ignore
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
@@ -2151,7 +2171,6 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
 
     # --- Filter dataframes for display and metrics ---
     df_original_display = data_map['Original']['display_df']
-    print(df_original_display[['Block_timestamp', 'Block_timestamp_date', 'Block Timestamp_date_orig']].head(10))
     df_compare_display = data_map['Comparison']['display_df']
 
     # --- Plot Original Data ---
@@ -2392,12 +2411,14 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
     # --- Generate Raw Data Table using AG Grid for virtualization ---
     table_component = None
     table_style = {'display': 'none'}
-    controls_style = {'display': 'none'}
+    raw_data_controls_style = {'display': 'none'}
+    visibility_controls_style = {'display': 'none'}
     if show_data_table:
         table_style = {'display': 'block'}
-        controls_style = {'display': 'block'}
+        raw_data_controls_style = {'display': 'block'}
+        visibility_controls_style = {'display': 'block'}
         df_display, column_defs = create_raw_data_table_data(
-            df_original_display, df_compare_display, selected_columns,
+            df_original_display, df_compare_display, selected_columns, show_original_cols, show_compare_cols,
             original_filename, compare_filename, sort_state
         )
 
@@ -2415,7 +2436,7 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
                     "autoHeight": True,
                     "cellRenderer": "agAnimateShowChangeCellRenderer"
                 },
-                dashGridOptions={"rowHeight": 50, "enableCellTextSelection": True, "ensureDomOrder": True, "suppressHeaderFocus": True},
+                dashGridOptions={"enableCellTextSelection": True, "ensureDomOrder": True, "suppressHeaderFocus": True, "suppressColumnVirtualisation": True},
                 columnSize="sizeToFit",
                 style={"width": "100%", "height": "500px"},
                 className="ag-theme-alpine-dark" if is_dark_theme else "ag-theme-alpine",
@@ -2425,6 +2446,11 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
 
     # Create custom legend
     custom_legend = create_custom_legend(fig, legend_values)
+
+    # Determine visibility of column toggles
+    both_files_loaded = not df_original_display.empty and not df_compare_display.empty
+    show_toggle_style = {'display': 'block'} if both_files_loaded else {'display': 'none'}
+
 
     # The `clear-cursor-button` click clears the store, so we return dash.no_update to avoid a circular dependency error.
     click_store_output = dash.no_update if triggered_id == 'clear-cursor-button' else None
@@ -2438,7 +2464,7 @@ def update_progress_graph_and_time(sort_state, window_index, original_data, comp
     x_values_sorted = sorted(list(set(all_x_values)))
 
     # The clientside callback is now responsible for legend-value-store, so we return no_update for it here.
-    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_component, table_style, custom_legend, controls_style, click_store_output, dash.no_update, x_values_sorted, clear_cursor_style
+    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_component, table_style, custom_legend, raw_data_controls_style, click_store_output, show_toggle_style, show_toggle_style, visibility_controls_style, dash.no_update, x_values_sorted, clear_cursor_style
 
 @app.callback(
     Output('click-position-store', 'data', allow_duplicate=True),
@@ -2450,8 +2476,7 @@ def store_click_data(clickData):
         return {'x': clickData['points'][0]['x']}
     return dash.no_update
 
-def create_raw_data_table_data(df_original_display, df_compare_display, selected_columns, original_filename, compare_filename, sort_state):
-    print("df_original_display columns:", df_original_display.columns.tolist())
+def create_raw_data_table_data(df_original_display, df_compare_display, selected_columns, show_original, show_compare, original_filename, compare_filename, sort_state):
     """Prepares data and column definitions for the AG Grid raw data table.""" # type: ignore
     data_col_names = {
         'Block_timestamp_date': 'Block Timestamp [Date]',
@@ -2523,28 +2548,44 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
             cell_style_orig = {}
             cell_style_comp = {}
             if 'Timestamp [Date]' in display_name:
-                # This JS function constructs the correct date column name (e.g., 'Block Timestamp_date_orig')
                 value_formatter_str = "params.value"
             elif 'Timestamp [s]' in display_name:
-                # This JS function constructs the correct date column name (e.g., 'Block Timestamp_date_orig')
                 value_formatter_str = "params.value != null ? d3.format(',')(params.value) : ''"
             elif 'Speed' in display_name or 'Time [s]' in display_name:
                 value_formatter_str = "params.value != null ? d3.format(',.2f')(params.value) : ''"
             else:
                 value_formatter_str = "params.value"
-            
-            value_formatter = {"function": value_formatter_str}
-            
-            if display_name in numeric_metrics_info:
+
+            if display_name in numeric_metrics_info and compare_valid:
+                print(f"DEBUG: Applying special formatter for '{display_name}'") # DEBUG
                 hib = numeric_metrics_info[display_name]['higher_is_better']
-                cell_style_orig = {"styleConditions": [
-                    {"condition": f"params.data['{orig_field}'] > params.data['{comp_field}']", "style": {"color": "green" if hib else "red"}},
-                    {"condition": f"params.data['{orig_field}'] < params.data['{comp_field}']", "style": {"color": "red" if hib else "green"}}
-                ]}
+                formatter_base = "params.value != null ? d3.format(',.2f')(params.value) : ''"
+                
+                # Original column formatter with diff
+                value_formatter_str_orig = f"""
+                    if (params.value == null) return '';
+                    let formatted = d3.format(',.2f')(params.value); // type: ignore
+                    const otherVal = params.data['{comp_field}'];
+                    console.log('DEBUG {display_name}: orig=', params.value, 'comp=', otherVal);
+                    if (otherVal != null) {{ // type: ignore
+                        const diff = params.value - otherVal;
+                        if (diff !== 0) {{
+                            const isBetter = {str(hib).lower()} ? (diff > 0) : (diff < 0);
+                            const color = isBetter ? 'green' : 'red';
+                            formatted += ` <small class="text-${{color}} fw-bold">(${{diff > 0 ? '+' : ''}}${{d3.format(',.2f')(diff)}})</small>`;
+                        }}
+                    }}
+                    return formatted;
+                """
+                orig_group_children.append({"headerName": display_name, "field": orig_field, "valueFormatter": {"function": value_formatter_str_orig}, "hide": is_hidden})
+
+                # Comparison column formatter (no diff needed here, just color)
                 cell_style_comp = {"styleConditions": [
-                    {"condition": f"params.data['{comp_field}'] > params.data['{orig_field}']", "style": {"color": "green" if hib else "red"}}, # Green if comparison is better
-                    {"condition": f"params.data['{comp_field}'] < params.data['{orig_field}']", "style": {"color": "red" if hib else "green"}} # Red if comparison is worse
+                    {"condition": f"params.data['{comp_field}'] > params.data['{orig_field}']", "style": {"color": "green" if hib else "red"}},
+                    {"condition": f"params.data['{comp_field}'] < params.data['{orig_field}']", "style": {"color": "red" if hib else "green"}}
                 ]}
+                comp_group_children.append({"headerName": display_name, "field": comp_field, "valueFormatter": {"function": formatter_base}, "cellStyle": cell_style_comp, "hide": is_hidden})
+                continue
 
             # Only add to column_defs if it's not the internal 'Block_timestamp_date' field
             if display_name == 'Block Timestamp_date':
@@ -2552,6 +2593,7 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
                 # It's used by the valueFormatter of 'Block Timestamp [s]'
                 continue
 
+            value_formatter = {"function": value_formatter_str}
             # For timestamp columns, use agHTMLCellRenderer
             if 'Timestamp' in display_name or 'Sync Time [Formatted]' in display_name:
                 orig_group_children.append({"headerName": display_name, "field": orig_field, "valueFormatter": value_formatter, "cellRenderer": "agHTMLCellRenderer", "cellStyle": cell_style_orig, "hide": is_hidden})
@@ -2559,10 +2601,9 @@ def create_raw_data_table_data(df_original_display, df_compare_display, selected
             else:
                 orig_group_children.append({"headerName": display_name, "field": orig_field, "valueFormatter": value_formatter, "cellStyle": cell_style_orig, "hide": is_hidden})
                 comp_group_children.append({"headerName": display_name, "field": comp_field, "valueFormatter": value_formatter, "cellStyle": cell_style_comp, "hide": is_hidden})
-
         column_defs.extend([
-            {"headerName": f"Original: {original_filename}", "children": orig_group_children},
-            {"headerName": f"Comparison: {compare_filename}", "children": comp_group_children}
+            {"headerName": f"Original: {original_filename}", "children": orig_group_children, "hide": not show_original},
+            {"headerName": f"Comparison: {compare_filename}", "children": comp_group_children, "hide": not show_compare}
         ])
 
         # Add a left border to the first visible column in the "Comparison" group
