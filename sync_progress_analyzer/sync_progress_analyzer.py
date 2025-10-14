@@ -1967,7 +1967,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     fig_dist_time_count = go.Figure()
 
 
-    def add_distribution_trace(fig, df, col, name, color, histnorm='probability density', yaxis=None, custom_hovertemplate=None, xbins=None):
+    def add_distribution_trace(fig, df, col, name, color, histnorm='probability density', custom_hovertemplate=None, xbins=None):
         if not df.empty and col in df.columns:
             data = df[col].dropna()
             if len(data) > 1:
@@ -1990,9 +1990,6 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     # For simplicity, we will ensure the name is consistent.
                 else:
                     trace_args['nbinsx'] = bins
-
-                if yaxis:
-                    trace_args['yaxis'] = yaxis
 
                 fig.add_trace(go.Histogram(**trace_args))
 
@@ -2065,23 +2062,19 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
     # Sync Speed Distribution
     add_distribution_trace(fig_dist_speed, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, xbins=speed_bins)
-    add_distribution_trace(fig_dist_speed_count, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, histnorm='', custom_hovertemplate='<b>Speed Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=speed_bins)
     if not df_compare_display.empty:
         add_distribution_trace(fig_dist_speed, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', xbins=speed_bins)
-        add_distribution_trace(fig_dist_speed_count, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', histnorm='', custom_hovertemplate='<b>Speed Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=speed_bins)
 
     # Sync Time Delta Distribution
     if not df_original_display.empty:
         time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_orig) > 1:
             add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, xbins=time_delta_bins)
-            add_distribution_trace(fig_dist_time_count, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, histnorm='', custom_hovertemplate='<b>Time Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=time_delta_bins)
 
     if not df_compare_display.empty:
         time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_comp) > 1:
             add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', xbins=time_delta_bins)
-            add_distribution_trace(fig_dist_time_count, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', histnorm='', custom_hovertemplate='<b>Time Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=time_delta_bins)
 
 
     # --- Layout Updates for Distribution plots ---
@@ -2090,7 +2083,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         hovermode='x unified',
         hoverlabel=hover_label_style,
         margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
@@ -2105,7 +2098,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         hovermode='x unified',
         hoverlabel=hover_label_style,
         margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
@@ -2120,73 +2113,180 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         hovermode='x unified',
         hoverlabel=hover_label_style,
         margin=dict(l=80, r=80, t=80, b=150),
         font_size=12,
         xaxis_title="Sync Speed [Blocks/sec]",
         yaxis_title="Count",
-        yaxis=dict(
-            title="Count"
-        ),
+        yaxis=dict(title=dict(text="Count", standoff=20), rangemode='tozero'),
         yaxis2=dict(
-            title="Percentage (%)",
+            title='Percentage (%)',
             overlaying='y',
             side='right',
             showgrid=False,
-            tickformat='.1f', # Format as float with 1 decimal place
-            ticksuffix='%'
+            tickformat='.1f',
+            ticksuffix='%',
+            title_standoff=25,
+            anchor='y',  # Rögzíti a tengelyt a fő y-tengelyhez a nullpontok igazításához
+            rangemode='tozero',
         ),
         barmode='group', # Group histograms side-by-side
         **background_style
     )
-    # Calculate total counts for scaling the secondary y-axis
-    total_count_speed_orig = len(df_original_display['Blocks_per_Second'].dropna()) if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns else 0
-    total_count_speed_comp = len(df_compare_display['Blocks_per_Second'].dropna()) if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns else 0
-    total_count_speed = total_count_speed_orig + total_count_speed_comp
-    if total_count_speed > 0:
-        max_y_val = fig_dist_speed_count.full_figure_for_development(warn=False).layout.yaxis.range[1]
-        fig_dist_speed_count.update_layout(yaxis2=dict(range=[0, (max_y_val / total_count_speed) * 100], automargin=True))
 
     fig_dist_time_count.update_layout(
         title_text=f'Sync Time Delta Distribution (Counts, Bins: {bins})',
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         hovermode='x unified',
         hoverlabel=hover_label_style,
         margin=dict(l=80, r=80, t=80, b=150),
         font_size=12,
         xaxis_title="Time Between Samples [s]",
         yaxis_title="Count",
-                yaxis=dict(
-            title="Count"
-        ),
+        yaxis=dict(title=dict(text="Count", standoff=20), rangemode='tozero'),
         yaxis2=dict(
-            title="Percentage (%)",
+            title='Percentage (%)',
             overlaying='y',
             side='right',
             showgrid=False,
             tickformat='.1f',
-            ticksuffix='%'
+            ticksuffix='%',
+            title_standoff=25,
+            anchor='y',  # Rögzíti a tengelyt a fő y-tengelyhez a nullpontok igazításához
+            rangemode='tozero',
         ),
         barmode='group', # Group histograms side-by-side
         **background_style
     )
-    # Calculate total counts for scaling the secondary y-axis
-    total_count_time_orig = len(df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()) if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns else 0
-    total_count_time_comp = len(df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()) if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns else 0
-    total_count_time = total_count_time_orig + total_count_time_comp
-    if total_count_time > 0:
-        max_y_val = fig_dist_time_count.full_figure_for_development(warn=False).layout.yaxis.range[1]
-        fig_dist_time_count.update_layout(yaxis2=dict(range=[0, (max_y_val / total_count_time) * 100], automargin=True))
+
+    # --- SPEED DISTRIBUTION ---
+    # --- Original Data ---
+    if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns:
+        speed_data_orig = df_original_display['Blocks_per_Second'].dropna()
+        if not speed_data_orig.empty:
+            # Bar chart (Count)
+            counts, bin_edges = np.histogram(speed_data_orig, bins=bins, range=(speed_bins['start'], speed_bins['end']) if speed_bins else None)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            fig_dist_speed_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Original', marker_color=original_ma_color, opacity=0.6, hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Count</b>: %{y}<extra></extra>'))
+            # Fit curve
+            try:
+                if len(speed_data_orig) > 1:
+                    kde = gaussian_kde(speed_data_orig)
+                    x_range = np.linspace(speed_data_orig.min(), speed_data_orig.max(), 500)
+                    kde_values = kde(x_range)
+                    max_hist_count = np.max(counts)
+                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
+                    fig_dist_speed_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Original (Fit)', line=dict(color=original_ma_color, width=2, dash='dash'), hovertemplate='<b>Speed</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
+            except Exception as e:
+                print(f"Could not generate KDE fit for Original Speed: {e}")
+            # Percentage curve
+            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
+            fig_dist_speed_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Original (%)', line=dict(color='orange', width=2), hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
+
+    # --- Comparison Data ---
+    if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns:
+        speed_data_comp = df_compare_display['Blocks_per_Second'].dropna()
+        if not speed_data_comp.empty:
+            # Bar chart (Count)
+            counts, bin_edges = np.histogram(speed_data_comp, bins=bins, range=(speed_bins['start'], speed_bins['end']) if speed_bins else None)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            fig_dist_speed_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Comparison', marker_color='magenta', opacity=0.6, hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Count</b>: %{y}<extra></extra>'))
+            # Fit curve
+            try:
+                if len(speed_data_comp) > 1:
+                    kde = gaussian_kde(speed_data_comp)
+                    x_range = np.linspace(speed_data_comp.min(), speed_data_comp.max(), 500)
+                    kde_values = kde(x_range)
+                    max_hist_count = np.max(counts)
+                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
+                    fig_dist_speed_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Comparison (Fit)', line=dict(color='magenta', width=2, dash='dash'), hovertemplate='<b>Speed</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
+            except Exception as e:
+                print(f"Could not generate KDE fit for Comparison Speed: {e}")
+            # Percentage curve
+            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
+            fig_dist_speed_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Comparison (%)', line=dict(color='cyan', width=2), hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
+
+    # --- TIME DELTA DISTRIBUTION ---
+    # --- Original Data ---
+    if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns:
+        time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
+        if not time_delta_orig.empty:
+            # Bar chart (Count)
+            counts, bin_edges = np.histogram(time_delta_orig, bins=bins, range=(time_delta_bins['start'], time_delta_bins['end']) if time_delta_bins else None)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            fig_dist_time_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Original', marker_color=original_ma_color, opacity=0.6, hovertemplate='<b>Time Range</b>: %{x:.2f}s<br><b>Count</b>: %{y}<extra></extra>'))
+            # Fit curve
+            try:
+                if len(time_delta_orig) > 1:
+                    kde = gaussian_kde(time_delta_orig)
+                    x_range = np.linspace(time_delta_orig.min(), time_delta_orig.max(), 500)
+                    kde_values = kde(x_range)
+                    max_hist_count = np.max(counts)
+                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
+                    fig_dist_time_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Original (Fit)', line=dict(color=original_ma_color, width=2, dash='dash'), hovertemplate='<b>Time Delta</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
+            except Exception as e:
+                print(f"Could not generate KDE fit for Original Time Delta: {e}")
+            # Percentage curve
+            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
+            fig_dist_time_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Original (%)', line=dict(color='orange', width=2), hovertemplate='<b>ΔTime Range</b>: %{x:.2f}s<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
+
+    # --- Comparison Data ---
+    if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns:
+        time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
+        if not time_delta_comp.empty:
+            # Bar chart (Count)
+            counts, bin_edges = np.histogram(time_delta_comp, bins=bins, range=(time_delta_bins['start'], time_delta_bins['end']) if time_delta_bins else None)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            fig_dist_time_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Comparison', marker_color='magenta', opacity=0.6, hovertemplate='<b>Time Range</b>: %{x:.2f}s<br><b>Count</b>: %{y}<extra></extra>'))
+            # Fit curve
+            try:
+                if len(time_delta_comp) > 1:
+                    kde = gaussian_kde(time_delta_comp)
+                    x_range = np.linspace(time_delta_comp.min(), time_delta_comp.max(), 500)
+                    kde_values = kde(x_range)
+                    max_hist_count = np.max(counts)
+                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
+                    fig_dist_time_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Comparison (Fit)', line=dict(color='magenta', width=2, dash='dash'), hovertemplate='<b>Time Delta</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
+            except Exception as e:
+                print(f"Could not generate KDE fit for Comparison Time Delta: {e}")
+            # Percentage curve
+            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
+            fig_dist_time_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Comparison (%)', line=dict(color='cyan', width=2), hovertemplate='<b>ΔTime Range</b>: %{x:.2f}s<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
+
+    # --- Final layout update for count plots to fix yaxis2 range ---
+    # This ensures the percentage axis doesn't rescale when traces are hidden.
+    max_percent_speed = max((trace.y.max() for trace in fig_dist_speed_count.data if hasattr(trace, 'y') and trace.y is not None and trace.yaxis == 'y2'), default=100)
+    if max_percent_speed > 0:
+        fig_dist_speed_count.update_layout(yaxis2_range=[0, max_percent_speed * 1.05])
+
+    max_percent_time = max((trace.y.max() for trace in fig_dist_time_count.data if hasattr(trace, 'y') and trace.y is not None and trace.yaxis == 'y2'), default=100)
+    if max_percent_time > 0:
+        fig_dist_time_count.update_layout(yaxis2_range=[0, max_percent_time * 1.05])
+
+    # --- Final layout update for count plots to fix xaxis range ---
+    # This prevents the secondary y-axis from adding a margin on the right.
+    if speed_bins and speed_bins.get('start') is not None and speed_bins.get('end') is not None:
+        # Add a small padding to the range
+        padding = (speed_bins['end'] - speed_bins['start']) * 0.01
+        fig_dist_speed_count.update_layout(xaxis_range=[speed_bins['start'] - padding, speed_bins['end'] + padding])
+
+    if time_delta_bins and time_delta_bins.get('start') is not None and time_delta_bins.get('end') is not None:
+        # Add a small padding to the range
+        padding = (time_delta_bins['end'] - time_delta_bins['start']) * 0.01
+        # Ensure padding is not zero if range is zero
+        if padding == 0: padding = 0.1
+        fig_dist_time_count.update_layout(xaxis_range=[time_delta_bins['start'] - padding, time_delta_bins['end'] + padding])
+
 
     # --- Update Y-Axes for fig2 with specific colors for clarity ---
     fig2.update_yaxes(
         title_text="<b>Sync in Progress Time [s]</b>",
-        secondary_y=False,
+        title_standoff=20, secondary_y=False,
         color="#1f77b4",
         linecolor="#1f77b4",
         gridcolor='rgba(28, 119, 180, 0.3)',
@@ -2195,7 +2295,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     )
     fig2.update_yaxes(
         title_text="<b>Sync Speed [Blocks/sec]</b>",
-        secondary_y=True,
+        title_standoff=25, secondary_y=True,
         color=original_bps_color,
         linecolor=original_bps_color,
         gridcolor=f'rgba({int(original_bps_color[1:3], 16)}, {int(original_bps_color[3:5], 16)}, {int(original_bps_color[5:7], 16)}, 0.3)',
@@ -2209,7 +2309,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         height=600,
         hovermode='x unified', hoverlabel=hover_label_style,
         xaxis_showspikes=True, xaxis_spikemode='across', xaxis_spikedash='dot',
-        yaxis_showspikes=True, yaxis_spikedash='dot', yaxis2_showspikes=True, yaxis2_spikedash='dot',
+        yaxis_showspikes=True, yaxis_spikedash='dot',
         legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
         template=graph_template,
         margin=dict(l=80, r=80, t=80, b=120),
@@ -2220,14 +2320,13 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             # Add some padding to the right of the secondary y-axis labels
             # to prevent them from being too close to the edge.
             title=dict(standoff=15),
-            automargin=True,
         ),
         **background_style
     )
     # --- Update Y-Axes with specific colors for clarity ---
     # Primary Y-axis [Block Height] - uses default color (blue/cyan)
     fig.update_yaxes(
-        title_text="<b>Block Height</b>",
+        title_text="<b>Block Height</b>", title_standoff=20,
         secondary_y=False,
         color="#1f77b4", # Sets tick and title font color
         linecolor="#1f77b4", # Sets axis line color
@@ -2237,7 +2336,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     )
     # Secondary Y-axis (Sync Speed) - uses orange color to match its traces
     fig.update_yaxes(
-        title_text="<b>Sync Speed [Blocks/sec]</b>",
+        title_text="<b>Sync Speed [Blocks/sec]</b>", title_standoff=25,
         secondary_y=True,
         color=original_bps_color, # Sets tick and title font color
         linecolor=original_bps_color, # Sets axis line color
@@ -2262,7 +2361,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         tick_text = [f"{int(val):,} sec<br>({format_seconds(val)})" for val in tick_values]
         fig.update_xaxes(tickvals=tick_values, ticktext=tick_text)
 
-    fig.update_xaxes(title_text="Sync in Progress Time [s]", automargin=True)
+    fig.update_xaxes(title_text="Sync in Progress Time [s]")
 
     # --- Prepare outputs for dropdowns ---
     # The order of outputs is determined by Dash. We get it from ctx.outputs_grouping.
