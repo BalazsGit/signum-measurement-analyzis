@@ -6,8 +6,9 @@ def upgrade_dependencies():
     print("--- Checking for dashboard dependency updates ---")
     try:
         # Using a single call to pip is more efficient. Add scipy for KDE plot.
+        # Kaleido is added for robust static image export and figure generation.
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "scipy"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "scipy", "kaleido"],
             check=True, capture_output=True, text=True, timeout=300 # 5 minute timeout
         )
         print("Dependencies are up to date.")
@@ -22,7 +23,7 @@ upgrade_dependencies()
 import pandas as pd
 import dash
 from dash import dcc, html
-from dash.dependencies import Input, Output, State
+from dash.dependencies import Input, Output, State, ClientsideFunction
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import base64
@@ -351,6 +352,21 @@ window.dash_clientside.clientside.clientside_script_loaded = function() {
     console.log("Clientside script loaded successfully.");
     return true;
 }
+
+window.dash_clientside.clientside.sync_sliders = function(...slider_values) {
+    const ctx = window.dash_clientside.callback_context;
+    // If the callback was not triggered by a user action, do not update.
+    if (!ctx.triggered || !ctx.triggered.length) {
+        return slider_values.map(() => window.dash_clientside.no_update);
+    }
+
+    // Get the value of the slider that was changed.
+    const changed_value = ctx.triggered[0].value;
+
+    // Create an array of the new value for each output slider.
+    const outputs = Array(ctx.outputs_list.length).fill(changed_value);
+    return outputs;
+};
 """
 
 # --- CSS and Asset Management ---
@@ -782,6 +798,15 @@ tooltip_texts = {
         'body': "This slider controls the number of bins (columns) used to create the histograms in the distribution chart. A smaller number of bins provides a more general overview of the data distribution, while a larger number reveals more detail but can also appear more noisy. Adjust this to find the best representation for your data."
     }
 ,
+    'distribution-graph-speed-count-title': {
+        'title': 'Sync Speed Distribution (Counts)',
+        'body': "This histogram shows the distribution of synchronization speeds, with the Y-axis representing the absolute count of samples falling into each speed bin. It helps to understand how many times the sync process operated at specific performance levels. A peak in a certain range indicates the most common sync speed."
+    },
+    'distribution-graph-time-delta-count-title': {
+        'title': 'Sync Time Delta Distribution (Counts)',
+        'body': "This histogram displays the distribution of time intervals between consecutive data points, with the Y-axis showing the absolute count of these intervals. It provides insight into the regularity of data sampling. A tall, narrow peak suggests consistent block processing times, while a wide or multi-peaked distribution points to variability in network latency or node processing load."
+    }
+,
     'progress-graph-title': {
         'title': 'Block Height and Sync Speed vs. Sync Time',
         'body': "This chart visualizes the synchronization progress over time.\n\n- The primary Y-axis (left, blue) shows the 'Block Height' of the node, which should increase over time as it syncs.\n- The secondary Y-axis (right, orange/magenta) shows the 'Sync Speed' in Blocks per Second. This includes both the instantaneous speed (dotted line) and a moving average (solid line) to show the trend.\n- The X-axis represents the 'Accumulated Sync in Progress Time' in seconds. This timer is only active when the node is significantly behind the network, providing an accurate measure of the time spent catching up.\n\nThis view is useful for understanding the overall duration of the sync process and identifying how performance changes over time."
@@ -1176,22 +1201,46 @@ app.layout = html.Div([
     html.Div([
         html.Div(id="progress-graph-title", className="mt-4"),
         dcc.Graph(id="progress-graph"),
+        html.Div([
+            html.Label("Moving Average Window:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window-1'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="ma-window-slider-1", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
         html.Div(id="blockheight-vs-speed-graph-title", className="mt-4"),
         dcc.Graph(id="blockheight-vs-speed-graph"),
         html.Div([
             html.Label("Moving Average Window:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="ma-window-slider", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
-        ], id="ma-slider-container", style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window-2'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="ma-window-slider-2", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
         html.Div(id="distribution-graph-speed-title", className="mt-4"),
         dcc.Graph(id="distribution-graph-speed"),
+        html.Div([
+            html.Label("Distribution Bins:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-1'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="distribution-bins-slider-1", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
         html.Div(id="distribution-graph-time-delta-title", className="mt-4"),
         dcc.Graph(id="distribution-graph-time-delta"),
         html.Div([
             html.Label("Distribution Bins:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="distribution-bins-slider", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'}), # type: ignore
-        ], id="distribution-bins-slider-container", style={'display': 'flex', 'alignItems': 'flex-start', 'marginTop': '20px'}),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-2'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="distribution-bins-slider-2", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
+        html.Div(id="distribution-graph-speed-count-title", className="mt-4"),
+        dcc.Graph(id="distribution-graph-speed-count"),
+        html.Div([
+            html.Label("Distribution Bins:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-3'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="distribution-bins-slider-3", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
+        html.Div(id="distribution-graph-time-delta-count-title", className="mt-4"),
+        dcc.Graph(id="distribution-graph-time-delta-count"),
+        html.Div([
+            html.Label("Distribution Bins:", className="me-2"),
+            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-4'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
+            html.Div(dcc.Slider(id="distribution-bins-slider-4", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
         html.Div(id="total-time-display-container"),
         html.Hr(),
         html.H3("Raw Data View", className="mt-4"),
@@ -1579,11 +1628,15 @@ def reload_compare_data(n_clicks, store_data):
     [Output("progress-graph", "figure"),
      Output("blockheight-vs-speed-graph", "figure"),
      Output("distribution-graph-speed", "figure"), # type: ignore
-     Output("distribution-graph-time-delta", "figure"),
+     Output("distribution-graph-time-delta", "figure"), # type: ignore
+     Output("distribution-graph-speed-count", "figure"), # type: ignore
+     Output("distribution-graph-time-delta-count", "figure"), # type: ignore
      Output("progress-graph-title", "children"),
      Output("blockheight-vs-speed-graph-title", "children"),
      Output("distribution-graph-speed-title", "children"),
      Output("distribution-graph-time-delta-title", "children"),
+     Output("distribution-graph-speed-count-title", "children"),
+     Output("distribution-graph-time-delta-count-title", "children"),
      Output("total-time-display-container", "children"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
@@ -1593,8 +1646,8 @@ def reload_compare_data(n_clicks, store_data):
      Output("data-table-container", "children"),
      Output("data-table-container", "style"),
     ],
-    [Input("ma-window-slider", "value"), # 0
-     Input("distribution-bins-slider", "value"),
+    [Input("ma-window-slider-1", "value"), # 0
+     Input("distribution-bins-slider-1", "value"),
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
      Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
@@ -1685,15 +1738,17 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         )
         summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
         
-        # Correctly form empty outputs for pattern-matching callbacks
-        num_start_dds = len(ctx.outputs_grouping[9]) if 9 < len(ctx.outputs_grouping) else 0
-        num_end_dds = len(ctx.outputs_grouping[11]) if 11 < len(ctx.outputs_grouping) else 0
+        # Correctly form empty outputs for pattern-matching callbacks by inspecting the full output list spec
+        num_start_dds = len(ctx.outputs_list[13])
+        num_start_vals_dds = len(ctx.outputs_list[14])
+        num_end_dds = len(ctx.outputs_list[15])
+        num_end_vals_dds = len(ctx.outputs_list[16])
         empty_start_opts = [[] for _ in range(num_start_dds)]
-        empty_start_vals = [None] * len(ctx.outputs_grouping[10]) if 10 < len(ctx.outputs_grouping) else []
+        empty_start_vals = [None] * num_start_vals_dds
         empty_end_opts = [[] for _ in range(num_end_dds)]
-        empty_end_vals = [None] * len(ctx.outputs_grouping[12]) if 12 < len(ctx.outputs_grouping) else []
+        empty_end_vals = [None] * num_end_vals_dds
         # Return empty titles as well
-        return empty_fig, empty_fig, empty_fig, empty_fig, None, None, None, None, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
+        return empty_fig, empty_fig, empty_fig, empty_fig, empty_fig, empty_fig, None, None, None, None, None, None, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
@@ -1929,65 +1984,137 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     bins = dist_bins_values[bins_index]
     fig_dist_speed = go.Figure()
     fig_dist_time = go.Figure()
+    fig_dist_speed_count = go.Figure()
+    fig_dist_time_count = go.Figure()
 
-    def add_distribution_trace(fig, df, col, name, color):
+
+    def add_distribution_trace(fig, df, col, name, color, histnorm='probability density', yaxis=None, custom_hovertemplate=None, xbins=None):
         if not df.empty and col in df.columns:
             data = df[col].dropna()
             if len(data) > 1:
                 # Histogram
-                fig.add_trace(go.Histogram(
-                    x=data,
-                    name=f'{name} (Histogram)',
-                    marker_color=color,
-                    opacity=0.6,
-                    nbinsx=bins,
-                    histnorm='probability density',
-                    hovertemplate='<b>Range</b>: %{x}<br><b>Density</b>: %{y}<extra></extra>',
-                    showlegend=True
-                ))
+                trace_args = {
+                    'x': data,
+                    'name': f'{name}',
+                    'marker_color': color,
+                    'opacity': 0.6,
+                    'histnorm': histnorm,
+                    'hovertemplate': custom_hovertemplate or '<b>Range</b>: %{x}<br><b>Density</b>: %{y}<extra></extra>',
+                    'showlegend': True
+                }
+
+                # Use explicit binning if provided, otherwise let Plotly decide (nbinsx)
+                if xbins:
+                    trace_args['xbins'] = xbins
+                    # When using xbins, legend entries for histograms can be duplicated if KDE is also present.
+                    # We can handle this by naming them differently or controlling showlegend.
+                    # For simplicity, we will ensure the name is consistent.
+                else:
+                    trace_args['nbinsx'] = bins
+
+                if yaxis:
+                    trace_args['yaxis'] = yaxis
+
+                fig.add_trace(go.Histogram(**trace_args))
 
                 # KDE Curve
-                try:
-                    kde = gaussian_kde(data)
-                    x_range = np.linspace(data.min(), data.max(), 500)
-                    kde_values = kde(x_range)
-                    fig.add_trace(go.Scatter(
-                        x=x_range,
-                        y=kde_values,
-                        mode='lines',
-                        name=f'{name} (KDE)',
-                        hovertemplate='<b>Value</b>: %{x:.2f}<br><b>Density</b>: %{y:.4f}<extra></extra>',
-                        line=dict(color=color, width=2),
-                        showlegend=True
-                    ))
-                except Exception as e:
-                    print(f"Could not generate KDE for {name} - {col}: {e}")
+                if len(data) > 1:
+                    try:
+                        kde = gaussian_kde(data)
+                        x_range = np.linspace(data.min(), data.max(), 500)
+                        kde_values = kde(x_range)
+
+                        if histnorm == 'probability density':
+                            # Plot standard KDE for density
+                            fig.add_trace(go.Scatter(
+                                x=x_range, y=kde_values, mode='lines', name=f'{name} (KDE)',
+                                hovertemplate='<b>Value</b>: %{x:.2f}<br><b>Density</b>: %{y:.4f}<extra></extra>',
+                                line=dict(color=color, width=2), showlegend=True
+                            ))
+                        elif histnorm == '':
+                            # --- Visual Scaling for Count Plot to match its own histogram's peak ---
+                            hist_range = None
+                            if xbins:
+                                hist_range = (xbins['start'], xbins['end'])
+
+                            # 1. Generate histogram data for the *current* series to find its max bar height
+                            counts, _ = np.histogram(data, bins=bins, range=hist_range)
+                            max_hist_count = np.max(counts) if len(counts) > 0 else 1
+                            
+                            # 2. Find the peak of the raw KDE curve
+                            max_kde_density = kde_values.max()
+
+                            # 3. Calculate a scaling factor to match the histogram's peak
+                            scaling_factor = max_hist_count / max_kde_density if max_kde_density > 0 else 1
+                            scaled_kde_values = kde_values * scaling_factor if scaling_factor > 0 else kde_values
+
+                            fig.add_trace(go.Scatter(
+                                x=x_range, y=scaled_kde_values, mode='lines', name=f'{name} (Fit)',
+                                hovertemplate=f'<b>Value</b>: %{{x:.2f}}<br><b>Estimated Count Fit ({name})</b>: %{{y:.2f}}<extra></extra>',
+                                line=dict(color=color, width=2, dash='dash'), showlegend=True
+                            ))
+
+                    except Exception as e:
+                        # Catch potential errors during KDE calculation (e.g., singular matrix)
+                        print(f"Could not generate KDE for {name} - {col}: {e}")
+
+
+    # --- Define explicit bins for consistent histograms ---
+    # For Sync Speed
+    speed_data_to_concat = []
+    if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns:
+        speed_data_to_concat.append(df_original_display['Blocks_per_Second'])
+    if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns:
+        speed_data_to_concat.append(df_compare_display['Blocks_per_Second'])
+    all_speed_data = pd.concat(speed_data_to_concat).dropna() if speed_data_to_concat else pd.Series(dtype=float)
+
+    speed_bins = None
+    if not all_speed_data.empty:
+        speed_bins = dict(start=all_speed_data.min(), end=all_speed_data.max(), size=(all_speed_data.max() - all_speed_data.min()) / bins)
+
+    # For Time Delta
+    time_delta_data_to_concat = []
+    if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns:
+        time_delta_data_to_concat.append(df_original_display['Accumulated_sync_in_progress_time[s]'].diff())
+    if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns:
+        time_delta_data_to_concat.append(df_compare_display['Accumulated_sync_in_progress_time[s]'].diff())
+    all_time_delta_data = pd.concat(time_delta_data_to_concat).dropna() if time_delta_data_to_concat else pd.Series(dtype=float)
+
+    time_delta_bins = None
+    if not all_time_delta_data.empty:
+        time_delta_bins = dict(start=all_time_delta_data.min(), end=all_time_delta_data.max(), size=(all_time_delta_data.max() - all_time_delta_data.min()) / bins)
 
     # Sync Speed Distribution
-    add_distribution_trace(fig_dist_speed, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color)
+    add_distribution_trace(fig_dist_speed, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, xbins=speed_bins)
+    add_distribution_trace(fig_dist_speed_count, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, histnorm='', custom_hovertemplate='<b>Speed Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=speed_bins)
     if not df_compare_display.empty:
-        add_distribution_trace(fig_dist_speed, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta')
+        add_distribution_trace(fig_dist_speed, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', xbins=speed_bins)
+        add_distribution_trace(fig_dist_speed_count, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', histnorm='', custom_hovertemplate='<b>Speed Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=speed_bins)
 
     # Sync Time Delta Distribution
     if not df_original_display.empty:
         time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_orig) > 1:
-            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color)
+            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, xbins=time_delta_bins)
+            add_distribution_trace(fig_dist_time_count, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, histnorm='', custom_hovertemplate='<b>Time Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=time_delta_bins)
 
     if not df_compare_display.empty:
         time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
         if len(time_delta_comp) > 1:
-            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta')
+            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', xbins=time_delta_bins)
+            add_distribution_trace(fig_dist_time_count, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', histnorm='', custom_hovertemplate='<b>Time Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>', xbins=time_delta_bins)
 
+
+    # --- Layout Updates for Distribution plots ---
     fig_dist_speed.update_layout(
         title_text=f'Sync Speed Distribution (Bins: {bins})',
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
         hovermode='x unified',
         hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=120),
+        margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
         font_size=12,
         xaxis_title="Sync Speed [Blocks/sec]",
         yaxis_title="Density",
@@ -1999,15 +2126,83 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         height=500,
         bargap=0.1,
         template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
         hovermode='x unified',
         hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=120),
+        margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
         font_size=12,
         xaxis_title="Time Between Samples [s]",
         yaxis_title="Density",
         **background_style
     )
+
+    fig_dist_speed_count.update_layout(
+        title_text=f'Sync Speed Distribution (Counts, Bins: {bins})',
+        height=500,
+        bargap=0.1,
+        template=graph_template,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        hovermode='x unified',
+        hoverlabel=hover_label_style,
+        margin=dict(l=80, r=80, t=80, b=150),
+        font_size=12,
+        xaxis_title="Sync Speed [Blocks/sec]",
+        yaxis_title="Count",
+        yaxis=dict(
+            title="Count"
+        ),
+        yaxis2=dict(
+            title="Percentage (%)",
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            tickformat='.1f', # Format as float with 1 decimal place
+            ticksuffix='%'
+        ),
+        barmode='group', # Group histograms side-by-side
+        **background_style
+    )
+    # Calculate total counts for scaling the secondary y-axis
+    total_count_speed_orig = len(df_original_display['Blocks_per_Second'].dropna()) if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns else 0
+    total_count_speed_comp = len(df_compare_display['Blocks_per_Second'].dropna()) if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns else 0
+    total_count_speed = total_count_speed_orig + total_count_speed_comp
+    if total_count_speed > 0:
+        max_y_val = fig_dist_speed_count.full_figure_for_development(warn=False).layout.yaxis.range[1]
+        fig_dist_speed_count.update_layout(yaxis2=dict(range=[0, (max_y_val / total_count_speed) * 100], automargin=True))
+
+    fig_dist_time_count.update_layout(
+        title_text=f'Sync Time Delta Distribution (Counts, Bins: {bins})',
+        height=500,
+        bargap=0.1,
+        template=graph_template,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+        hovermode='x unified',
+        hoverlabel=hover_label_style,
+        margin=dict(l=80, r=80, t=80, b=150),
+        font_size=12,
+        xaxis_title="Time Between Samples [s]",
+        yaxis_title="Count",
+                yaxis=dict(
+            title="Count"
+        ),
+        yaxis2=dict(
+            title="Percentage (%)",
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            tickformat='.1f',
+            ticksuffix='%'
+        ),
+        barmode='group', # Group histograms side-by-side
+        **background_style
+    )
+    # Calculate total counts for scaling the secondary y-axis
+    total_count_time_orig = len(df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()) if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns else 0
+    total_count_time_comp = len(df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()) if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns else 0
+    total_count_time = total_count_time_orig + total_count_time_comp
+    if total_count_time > 0:
+        max_y_val = fig_dist_time_count.full_figure_for_development(warn=False).layout.yaxis.range[1]
+        fig_dist_time_count.update_layout(yaxis2=dict(range=[0, (max_y_val / total_count_time) * 100], automargin=True))
 
     # --- Update Y-Axes for fig2 with specific colors for clarity ---
     fig2.update_yaxes(
@@ -2092,11 +2287,11 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
     # --- Prepare outputs for dropdowns ---
     # The order of outputs is determined by Dash. We get it from ctx.outputs_grouping.
-    # We must check if the grouping exists, as it might not on initial load.
-    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[9]] if 9 < len(ctx.outputs_grouping) else []
-    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_grouping[10]] if 10 < len(ctx.outputs_grouping) else []
-    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_grouping[11]] if 11 < len(ctx.outputs_grouping) else []
-    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_grouping[12]] if 12 < len(ctx.outputs_grouping) else []
+    # Use ctx.outputs_list which is more reliable for pattern-matching callbacks.
+    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[13]]
+    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_list[14]]
+    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[15]]
+    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_list[16]]
 
     # --- Update total time display and metrics tables ---
     table_title_original = f"Original: {original_filename}"
@@ -2350,9 +2545,11 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     title2 = create_chart_title_with_icon(f'Sync Time and Sync Speed vs. Block Height (MA Window: {window})', 'blockheight-vs-speed-graph-title')
     title3 = create_chart_title_with_icon(f'Sync Speed Distribution (Bins: {bins})', 'distribution-graph-speed-title')
     title4 = create_chart_title_with_icon(f'Sync Time Delta Distribution (Bins: {bins})', 'distribution-graph-time-delta-title')
+    title5 = create_chart_title_with_icon(f'Sync Speed Distribution (Counts, Bins: {bins})', 'distribution-graph-speed-count-title')
+    title6 = create_chart_title_with_icon(f'Sync Time Delta Distribution (Counts, Bins: {bins})', 'distribution-graph-time-delta-count-title')
 
 
-    return fig, fig2, fig_dist_speed, fig_dist_time, title1, title2, title3, title4, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
+    return fig, fig2, fig_dist_speed, fig_dist_time, fig_dist_speed_count, fig_dist_time_count, title1, title2, title3, title4, title5, title6, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
 
 @app.callback(
     Output('action-feedback-store', 'data', allow_duplicate=True),
@@ -2403,7 +2600,7 @@ def show_tooltip_modal(n_clicks):
     if '-' in metric_id and any(metric_id.startswith(p) for p in ['Original-', 'Comparison-']):
         metric_name = metric_id.split('-', 1)[1]
     else:
-        metric_name = metric_id
+        metric_name = re.sub(r'-\d+$', '', metric_id)
     info = tooltip_texts.get(metric_name, {})
     title = info.get('title', 'Information')
     body_text = info.get('body', 'No details available for this metric.')
@@ -3009,8 +3206,8 @@ app.clientside_callback( # type: ignore
     dash.ClientsideFunction(namespace='clientside', function_name='report_generator'),
     Output('html-content-store', 'data', allow_duplicate=True),
     Input('save-button', 'n_clicks'),
-    [State('ma-window-slider', 'value'),
-     State('distribution-bins-slider', 'value'),
+    [State('ma-window-slider-1', 'value'),
+     State('distribution-bins-slider-1', 'value'),
      State('progress-graph', 'figure'),
      State('blockheight-vs-speed-graph', 'figure'),
      State('distribution-graph-speed', 'figure'),
@@ -3068,6 +3265,25 @@ def open_report_in_browser(n_clicks, filepath):
         print(f"Could not open report file: {e}")
         traceback.print_exc()
     return dash.no_update
+
+app.clientside_callback(
+    ClientsideFunction(namespace='clientside', function_name='sync_sliders'),
+    [
+        Output('ma-window-slider-1', 'value'),
+        Output('ma-window-slider-2', 'value'),
+    ],
+    [
+        Input('ma-window-slider-1', 'value'),
+        Input('ma-window-slider-2', 'value'),
+    ]
+)
+
+app.clientside_callback(
+    ClientsideFunction(namespace='clientside', function_name='sync_sliders'),
+    [Output(f'distribution-bins-slider-{i}', 'value') for i in range(1, 5)],
+    [Input(f'distribution-bins-slider-{i}', 'value') for i in range(1, 5)]
+)
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=8050)
