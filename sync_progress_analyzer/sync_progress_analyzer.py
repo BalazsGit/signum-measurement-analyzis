@@ -69,7 +69,7 @@ REPORT_GENERATOR_JS = """
 window.dash_clientside = window.dash_clientside || {};
 window.dash_clientside.clientside = window.dash_clientside.clientside || {};
 
-window.dash_clientside.clientside.reset_upload_component = function(upload_id) {
+window.dash_clientside.clientside.reset_upload_component = function(upload_id, n_clicks) {
     if (!upload_id) {
         return window.dash_clientside.no_update;
     }
@@ -86,8 +86,8 @@ window.dash_clientside.clientside.reset_upload_component = function(upload_id) {
     }
     return window.dash_clientside.no_update;
 };
-window.dash_clientside.clientside.report_generator = async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure_speed, distribution_figure_time_delta) {
-    if (!n_clicks) {
+window.dash_clientside.clientside.report_generator = async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure_speed, distribution_figure_time_delta, distribution_figure_speed_count, distribution_figure_time_delta_count) {
+    if (n_clicks === 0 || n_clicks === null || n_clicks === undefined) {
         // This is the initial call or a callback update where the button wasn't clicked.
         return window.dash_clientside.no_update;
     }
@@ -132,28 +132,6 @@ window.dash_clientside.clientside.report_generator = async function(n_clicks, ma
                 input.parentElement.replaceChild(staticEl, input);
             }
         });
-
-        // 3. Slider
-        const ma_windows = [10, 100, 200, 300, 400, 500];
-        const window_size = ma_windows[ma_slider_value_index];
-        const maSliderContainer = clone.querySelector('#ma-slider-container');
-        if (maSliderContainer) {
-            const staticEl = document.createElement('div');
-            staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
-            staticEl.className = 'mt-3'; // Add some margin
-            staticEl.style.fontWeight = 'bold';
-            maSliderContainer.parentNode.replaceChild(staticEl, maSliderContainer);
-        }
-        const dist_bins_values = [10, 100, 200, 300, 400, 500];
-        const dist_bins_size = dist_bins_values[dist_slider_value_index];
-        const distSliderContainer = clone.querySelector('#distribution-bins-slider-container');
-        if (distSliderContainer) {
-            const staticEl = document.createElement('div');
-            staticEl.textContent = `Distribution Bins: ${dist_bins_size}`;
-            staticEl.className = 'mt-3';
-            staticEl.style.fontWeight = 'bold';
-            distSliderContainer.parentNode.replaceChild(staticEl, distSliderContainer);
-        }
 
         // --- Remove all interactive/unnecessary elements ---
         const selectorsToRemove = [
@@ -220,7 +198,9 @@ window.dash_clientside.clientside.report_generator = async function(n_clicks, ma
             { id: 'progress-graph', figure: progress_figure },
             { id: 'blockheight-vs-speed-graph', figure: blockheight_figure },
             { id: 'distribution-graph-speed', figure: distribution_figure_speed }, // Use the correct argument name
-            { id: 'distribution-graph-time-delta', figure: distribution_figure_time_delta } // Use the correct argument name
+            { id: 'distribution-graph-time-delta', figure: distribution_figure_time_delta }, // Use the correct argument name
+            { id: 'distribution-graph-speed-count', figure: distribution_figure_speed_count },
+            { id: 'distribution-graph-time-delta-count', figure: distribution_figure_time_delta_count }
         ];
 
         for (const graphInfo of graphsToConvert) {
@@ -1481,7 +1461,6 @@ def update_compare_upload_text(data):
 
 @app.callback(
     [Output('original-data-store', 'data'),
-     Output('upload-original-progress', 'contents', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('discard-original-button', 'n_clicks'),
     State('unsaved-changes-store', 'data'),
@@ -1490,12 +1469,12 @@ def update_compare_upload_text(data):
 def discard_original_data(n_clicks, unsaved_data):
     """Clears the original data store and resets the upload component when the discard button is clicked."""
     if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update
     
     new_unsaved_data = unsaved_data.copy()
     new_unsaved_data['Original'] = False
     # Setting store to None clears data, setting contents to None resets the Upload component
-    return None, None, new_unsaved_data
+    return None, new_unsaved_data
 
 @app.callback(
     [Output('compare-data-store', 'data', allow_duplicate=True),
@@ -3195,13 +3174,13 @@ def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
 
 app.clientside_callback( # type: ignore
     dash.ClientsideFunction(namespace='clientside', function_name='reset_upload_component'),
-    Output('reset-upload-store', 'data', allow_duplicate=True),
-    Input('reset-upload-store', 'data'),
+    Output('upload-original-progress', 'contents', allow_duplicate=True),
+    Input('discard-original-button', 'n_clicks'),
     prevent_initial_call=True
 )
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
-# --- Callbacks for saving HTML report ---
+# --- Callback for saving HTML report ---
 app.clientside_callback( # type: ignore
     dash.ClientsideFunction(namespace='clientside', function_name='report_generator'),
     Output('html-content-store', 'data', allow_duplicate=True),
@@ -3211,7 +3190,9 @@ app.clientside_callback( # type: ignore
      State('progress-graph', 'figure'),
      State('blockheight-vs-speed-graph', 'figure'),
      State('distribution-graph-speed', 'figure'),
-     State('distribution-graph-time-delta', 'figure')],
+     State('distribution-graph-time-delta', 'figure'),
+     State('distribution-graph-speed-count', 'figure'),
+     State('distribution-graph-time-delta-count', 'figure')],
     prevent_initial_call=True
 )
 
