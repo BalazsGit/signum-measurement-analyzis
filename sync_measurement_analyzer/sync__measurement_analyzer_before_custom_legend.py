@@ -5,10 +5,9 @@ def upgrade_dependencies():
     """Attempts to upgrade the core dependencies of the application at startup."""
     print("--- Checking for dashboard dependency updates ---")
     try:
-        # Using a single call to pip is more efficient. Add scipy for KDE plot.
-        # Kaleido is added for robust static image export and figure generation.
+        # Using a single call to pip is more efficient
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly", "scipy", "kaleido"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "dash", "dash-bootstrap-components", "pandas", "plotly"],
             check=True, capture_output=True, text=True, timeout=300 # 5 minute timeout
         )
         print("Dependencies are up to date.")
@@ -23,15 +22,13 @@ upgrade_dependencies()
 import pandas as pd
 import dash
 from dash import dcc, html
-from dash.dependencies import Input, Output, State, ClientsideFunction
+from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import base64
 import io
 from datetime import timedelta
 import datetime
-import numpy as np
-from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
 import os
 import webbrowser
@@ -63,291 +60,6 @@ except Exception as e:
 # --- SCRIPT DIRECTORY ---
 # Use the real path to resolve any symlinks and get the directory of the script
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-
-# --- JavaScript for Report Generation ---
-REPORT_GENERATOR_JS = """
-window.dash_clientside = window.dash_clientside || {};
-window.dash_clientside.clientside = window.dash_clientside.clientside || {};
-
-window.dash_clientside.clientside.reset_upload_component = function(upload_id, n_clicks) {
-    if (!upload_id) {
-        return window.dash_clientside.no_update;
-    }
-    // This is a bit of a hack to reset the dcc.Upload component.
-    // It finds the 'x' (remove) button inside the upload component and clicks it.
-    // This is more reliable than trying to set `contents` to null from the server.
-    const uploadElement = document.getElementById(upload_id);
-    if (uploadElement) {
-        // The actual clickable element is often a div or span inside the main component
-        const removeButton = uploadElement.querySelector('div > div > span');
-        if (removeButton) {
-            removeButton.click();
-        }
-    }
-    return window.dash_clientside.no_update;
-};
-window.dash_clientside.clientside.report_generator = async function(n_clicks, ma_slider_value_index, dist_slider_value_index, progress_figure, blockheight_figure, distribution_figure_speed, distribution_figure_time_delta, distribution_figure_speed_count, distribution_figure_time_delta_count) {
-    if (n_clicks === 0 || n_clicks === null || n_clicks === undefined) {
-        // This is the initial call or a callback update where the button wasn't clicked.
-        return window.dash_clientside.no_update;
-    }
-
-    try {
-        const rootElement = document.documentElement;
-        if (!rootElement) {
-            return 'CLIENTSIDE_ERROR: root element (html) not found.';
-        }
-        // Clone the container to avoid modifying the live DOM
-        const clone = rootElement.cloneNode(true);
-
-        const isDarkTheme = document.documentElement.getAttribute('data-bs-theme') === 'dark';
-
-        // --- Replace interactive elements with static text ---
-
-        // 1. Dropdowns
-        clone.querySelectorAll('div[id*="start-block-dropdown"], div[id*="end-block-dropdown"]').forEach(clonedDropdown => {
-            const originalDropdown = document.getElementById(clonedDropdown.id);
-            const wrapper = clonedDropdown.parentElement;
-            if (originalDropdown && wrapper && wrapper.parentElement) {
-                const originalDropdownValue = originalDropdown.querySelector('.Select-value-label, .Select__single-value');
-                const valueText = originalDropdownValue ? originalDropdownValue.textContent : 'N/A';
-                const staticEl = document.createElement('div');
-                staticEl.textContent = valueText;
-                staticEl.className = 'text-end';
-                staticEl.style.width = '50%';
-                staticEl.style.fontSize = '0.875em';
-                staticEl.style.color = 'var(--bs-body-color)';
-                wrapper.parentElement.replaceChild(staticEl, wrapper);
-            }
-        });
-
-        // 2. Metadata Inputs
-        clone.querySelectorAll('input[id*="metadata-input"]').forEach(input => {
-            if (input.parentElement) {
-                const valueText = input.value || 'N/A';
-                const staticEl = document.createElement('div');
-                staticEl.textContent = valueText;
-                staticEl.className = 'text-end text-muted';
-                staticEl.style.fontSize = '0.875em';
-                input.parentElement.replaceChild(staticEl, input);
-            }
-        });
-
-        // --- Remove all interactive/unnecessary elements ---
-        const selectorsToRemove = [
-            // General UI controls
-            '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
-            '#show-data-table-switch-container', '#original-upload-container', '#compare-upload-container', 'span[id*="info-icon"]',
-            'script', '#loading-overlay',
-            '#_dash-dev-tools-ui-container', // Dash Dev Tools main container
-            // Dash developer/debug panels and error overlays (Dash 3.x)
-            '#_dash-debug-menu',
-            '.dash-debug-menu',
-            '.dash-debug-menu__button',
-            '.dash-debug-menu__title',
-            '.dash-debug-menu__version',
-            '.dash-debug-menu__server',
-            '.dash-debug-menu__status',
-            '.dash-debug-menu__icon',
-            '.dash-debug-menu__indicator',
-            '.dash-debug-menu__status--success',
-            '.dash-debug-menu__status--error',
-            '.bi-arrow-bar-left',
-            '.bi-arrow-left',
-            '.bi-arrow-return-left',
-            '.dash-error-message',
-            '.dash-fe-error__title',
-            '.dash-fe-error__message',
-            '.dash-fe-error__stack',
-            '.dash-dev-tools-menu',
-            '.dash-dev-tools-menu__button',
-            '.dash-dev-tools-menu__title',
-            '.dash-dev-tools-menu__version',
-            '.dash-dev-tools-menu__server',
-            // Reload and discard buttons
-            '#reload-original-button', '#reload-compare-button',
-            '#discard-original-button', '#discard-compare-button',
-            // Individual metadata controls
-            'span[id*="delete-metadata-button"]',
-            'span[id*="unsaved-changes-badge"]'
-        ];
-        // Remove any undefined or empty selectors to avoid JS errors
-        const validSelectorsToRemove = selectorsToRemove.filter(s => typeof s === 'string' && s.length > 0);
-        const extraArrowSelectors = [
-            '.dash-debug-menu__outer'
-            ,'.dash-debug-menu__outer--expanded'
-            ,'.dash-debug-menu__toggle'
-            ,'.dash-debug-menu__toggle--expanded'
-        ];
-        const allSelectorsToRemove = validSelectorsToRemove.concat(extraArrowSelectors);
-        clone.querySelectorAll(allSelectorsToRemove.join(', ')).forEach(el => el.remove());
-
-        // --- Remove entire rows for certain controls ---
-        const rowSelectorsToRemove = [
-            'button[id*="add-metadata-button"]', // The "Add" button and its row
-            'button[id*="reset-view-button"]', // The entire bar with Reset, Clear, and Save buttons
-            'button[id*="save-overwrite-button"]'
-        ];
-        clone.querySelectorAll(rowSelectorsToRemove.join(', ')).forEach(el => {
-            const parentRow = el.closest('.list-group-item');
-            if (parentRow) parentRow.remove();
-        });
-
-        // --- Convert all Plotly graphs to static images ---
-        const graphsToConvert = [
-            { id: 'progress-graph', figure: progress_figure },
-            { id: 'blockheight-vs-speed-graph', figure: blockheight_figure },
-            { id: 'distribution-graph-speed', figure: distribution_figure_speed }, // Use the correct argument name
-            { id: 'distribution-graph-time-delta', figure: distribution_figure_time_delta }, // Use the correct argument name
-            { id: 'distribution-graph-speed-count', figure: distribution_figure_speed_count },
-            { id: 'distribution-graph-time-delta-count', figure: distribution_figure_time_delta_count }
-        ];
-
-        for (const graphInfo of graphsToConvert) {
-            const graphDiv = clone.querySelector(`#${graphInfo.id}`);
-            const originalGraphDiv = document.getElementById(graphInfo.id);
-
-            if (graphDiv && originalGraphDiv && window.Plotly && graphInfo.figure) {
-                const tempDiv = document.createElement('div');
-                // Position it off-screen
-                tempDiv.style.position = 'absolute';
-                tempDiv.style.left = '-9999px';
-                tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
-                tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
-                document.body.appendChild(tempDiv);
-
-                try {
-                    // Deep copy the figure object for this iteration to prevent race conditions.
-                    // This ensures that modifications to layout for one graph don't affect
-                    // the rendering of another graph that might be processing asynchronously.
-                    const figureCopy = JSON.parse(JSON.stringify(graphInfo.figure));
-                    const data = figureCopy.data;
-                    const layout = figureCopy.layout;
-
-                    if (isDarkTheme) {
-                        layout.paper_bgcolor = '#222529'; // Darkly theme background
-                        layout.plot_bgcolor = '#222529';
-                    }
-
-                    // Increase font sizes for better readability in the saved image
-                    const fontSizeIncrease = 6; // Increase font size by 6 points
-
-                    if (layout.title) { // Ensure title object exists
-                        layout.title = (typeof layout.title === 'string') ? { text: layout.title } : layout.title;
-                    } else {
-                        layout.title = {};
-                    }
-                    layout.title.font = layout.title.font || {};
-                    layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
-                    ['xaxis', 'yaxis', 'xaxis2', 'yaxis2'].forEach(axis => {
-                        if (layout[axis]) {
-                            layout[axis].title = layout[axis].title || {};
-                            layout[axis].title.font = layout[axis].title.font || {};
-                            layout[axis].title.font.size = (layout[axis].title.font.size || 12) + fontSizeIncrease + 2;
-                            layout[axis].tickfont = layout[axis].tickfont || {};
-                            layout[axis].tickfont.size = (layout[axis].tickfont.size || 12) + fontSizeIncrease;
-                        }
-                    });
-                    // Handle single or multiple legends
-                    const legends = ['legend', 'legend1', 'legend2'];
-                    for (const legendName of legends) {
-                        if (layout[legendName]) {
-                            layout[legendName].font = layout[legendName].font || {};
-                                layout[legendName].font.size = (layout[legendName].font.size || 10) + fontSizeIncrease;
-                        }
-                    }
-
-                    await window.Plotly.newPlot(tempDiv, data, layout, {displayModeBar: false});
-
-                    const dataUrl = await window.Plotly.toImage(tempDiv, {
-                        format: 'png',
-                        height: originalGraphDiv.offsetHeight * 1.5,
-                        width: originalGraphDiv.offsetWidth * 1.5,
-                        scale: 2
-                    });
-
-                    const img = document.createElement('img');
-                    img.src = dataUrl;
-                    img.style.width = '100%';
-                    img.style.height = 'auto';
-                    graphDiv.parentNode.replaceChild(img, graphDiv);
-                } catch (e) {
-                    console.error(`Plotly.toImage failed for ${graphInfo.id}:`, e);
-                    const p = document.createElement('p');
-                    p.innerText = '[Error converting chart to image]';
-                    p.style.color = 'red';
-                    graphDiv.parentNode.replaceChild(p, graphDiv);
-                } finally {
-                    document.body.removeChild(tempDiv);
-                }
-            } else if (graphDiv && graphDiv.parentNode) {
-                const p = document.createElement('p');
-                p.innerText = '[Chart not included in this report version.]';
-                graphDiv.parentNode.replaceChild(p, graphDiv);
-            }
-        }
-
-        // --- Fetch and embed CSS ---
-        let cssText = '';
-        const styleSheets = Array.from(document.styleSheets);
-        const cssPromises = styleSheets.map(sheet => {
-            try {
-                // For external stylesheets, fetch the content
-                if (sheet.href) {
-                    return fetch(sheet.href)
-                        .then(response => response.ok ? response.text() : '')
-                        .catch(() => '');
-                } else if (sheet.cssRules) {
-                    return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
-                }
-            } catch (e) {
-                // Silently fail on security errors for cross-origin stylesheets
-            }
-            return undefined; // Return undefined for sheets that can't be processed
-        }).filter(p => p); // Filter out undefined promises
-
-        const cssContents = await Promise.all(cssPromises);
-        cssText = cssContents.join('\\n'); // Use '\\n' for JS newlines
-
-        // --- Escape backticks and other problematic characters ---
-        const cleanCssText = cssText.replace(/`/g, '\\`');
-
-        // Construct the full HTML document
-        const fullHtml = `
-            <!DOCTYPE html>
-            <html lang="en" data-bs-theme="${isDarkTheme ? 'dark' : 'light'}"><head><meta charset="utf-8"><title>Sync Progress Report</title><style>${cleanCssText}</style></head>
-            <body>${clone.querySelector('body').innerHTML}</body>
-            </html>
-        `;
-        console.log("Returning fullHtml:", typeof fullHtml, fullHtml ? fullHtml.length : 0);
-        return { content: fullHtml };
-    } catch (e) {
-            console.error("⚠️ CLIENTSIDE CALLBACK ERROR:", e);
-            alert('Caught an error in callback: ' + e.message);
-            return { content: 'CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack };
-    }
-}
-
-window.dash_clientside.clientside.clientside_script_loaded = function() {
-    console.log("Clientside script loaded successfully.");
-    return true;
-}
-
-window.dash_clientside.clientside.sync_sliders = function(...slider_values) {
-    const ctx = window.dash_clientside.callback_context;
-    // If the callback was not triggered by a user action, do not update.
-    if (!ctx.triggered || !ctx.triggered.length) {
-        return slider_values.map(() => window.dash_clientside.no_update);
-    }
-
-    // Get the value of the slider that was changed.
-    const changed_value = ctx.triggered[0].value;
-
-    // Create an array of the new value for each output slider.
-    const outputs = Array(ctx.outputs_list.length).fill(changed_value);
-    return outputs;
-};
-"""
 
 # --- CSS and Asset Management ---
 CUSTOM_CSS = """
@@ -529,12 +241,6 @@ def setup_directories():
     assets_dir = os.path.join(SCRIPT_DIR, "assets")
     if not os.path.isdir(assets_dir):
         os.makedirs(assets_dir)
-
-    # Write/update the report generator JS file
-    with open(os.path.join(assets_dir, "report_generator.js"), "w", encoding="utf-8") as f:
-        f.write(REPORT_GENERATOR_JS)
-
-    # Write/update the custom CSS file
     with open(os.path.join(assets_dir, "custom_styles.css"), "w", encoding="utf-8") as f:
         f.write(CUSTOM_CSS)
 
@@ -544,14 +250,25 @@ def setup_directories():
         os.makedirs(measurements_dir)
         print(f"Info: Created 'measurements' directory at: {measurements_dir}")
 
+    # Directory for saved files with updated metadata
+    saved_dir = os.path.join(measurements_dir, "saved")
+    if not os.path.isdir(saved_dir):
+        os.makedirs(saved_dir)
+
 # --- Helper Functions ---
 def find_header_row(lines):
     """Finds the index of the header row in a list of lines by looking for key columns."""
+    # First, try to find the header for the more detailed sync_measurement.csv format,
+    # which can be anywhere after the metadata block.
     for i, line in enumerate(lines):
         # A good heuristic for the header is the presence of 'Block_height' and multiple semicolons
         if ('Block_height' in line or 'Block_timestamp' in line) and line.count(';') >= 2:
             return i
-    return 0 # Fallback to the first line if no specific header is found
+    # If not found, it might be a simpler sync_progress.csv which starts at line 0.
+    # Check for its characteristic column.
+    if lines and 'Accumulated_sync_time[s]' in lines[0]:
+        return 0
+    return 0 # Fallback to the first line if no specific header is found otherwise
 
 def extract_metadata(lines):
     """Extracts key-value metadata from the initial lines of the CSV."""
@@ -598,14 +315,17 @@ def load_csv_from_path(filepath):
         return None, feedback
 
 initial_metadata = {}
-initial_csv_path = os.path.join(SCRIPT_DIR, "measurements", "sync_progress.csv")
+initial_csv_path = os.path.join(SCRIPT_DIR, "measurements", "sync_measurement.csv")
 try:
-    with open(initial_csv_path, 'r', encoding='utf-8') as f:
+    with open(initial_csv_path, 'r', encoding='utf-8') as f: # type: ignore
         lines = f.readlines()
     header_row = find_header_row(lines)
     initial_metadata = extract_metadata(lines)
     # Pass only the relevant lines to pandas, starting from the header
-    df_progress = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=";")
+    df_progress = pd.read_csv(io.StringIO("".join(lines[header_row:])), sep=";", dtype={
+        'Cumulative_difficulty': object,
+        'Block_timestamp': 'int64'
+    })
     df_progress.columns = df_progress.columns.str.strip()
 except FileNotFoundError:
     df_progress = pd.DataFrame()
@@ -613,6 +333,10 @@ except FileNotFoundError:
 except Exception as e:
     df_progress = pd.DataFrame()
     print(f"Error reading initial {initial_csv_path}: {e}")
+
+# --- Constants ---
+# Signum Genesis Block: 2014-08-11 02:00:00 UTC
+SIGNUM_GENESIS_TIMESTAMP = datetime.datetime(2014, 8, 11, 2, 0, 0, tzinfo=datetime.timezone.utc)
 
 # --- Helper Function ---
 def format_seconds(seconds):
@@ -624,12 +348,12 @@ def format_seconds(seconds):
 # --- Tooltip Content ---
 tooltip_texts = {
     'Original File': {
-        'title': 'Original sync_progress.csv',
-        'body': "This is the primary data file for analysis. It should be a CSV file containing synchronization progress data, typically named `sync_progress.csv`. The data from this file will be used to generate the main graphs and metrics. You can either drag and drop the file here or click to select it from your computer."
+        'title': 'Original sync_measurement.csv',
+        'body': "This is the primary data file for analysis. It should be a CSV file containing detailed synchronization performance data, typically named `sync_measurement.csv`. The data from this file will be used to generate the main graphs and metrics. You can either drag and drop the file here or click to select it from your computer."
     },
     'Comparison File': {
-        'title': 'Comparison sync_progress.csv',
-        'body': "This is an optional secondary data file used for comparison. If you provide a second `sync_progress.csv` file here, the application will display its data alongside the original data, allowing for a side-by-side performance comparison. This is useful for evaluating the impact of changes in node configuration, hardware, or network conditions."
+        'title': 'Comparison sync_measurement.csv',
+        'body': "This is an optional secondary data file used for comparison. If you provide a second `sync_measurement.csv` file here, the application will display its data alongside the original data, allowing for a side-by-side performance comparison. This is useful for evaluating the impact of changes in node configuration, hardware, or network conditions."
     },
     # System Info Tooltips
     'Signum Version': {
@@ -677,47 +401,47 @@ tooltip_texts = {
         'body': "The version of the database software."
     },
     'Total Sync in Progress Time': {
-        'title': 'Total Sync in Progress Time [s]',
+        'title': 'Total Sync in Progress Time',
         'body': "This metric represents the total duration the node has spent in an active synchronization state. The timer for this metric is active only when the node's block height is significantly behind the network's current height (typically more than 10 blocks). It provides a precise measure of the time required to catch up with the blockchain, excluding periods when the node is already fully synchronized or idle. This is a key performance indicator for evaluating the efficiency of the sync process under load."
     },
     'Total Blocks Synced': {
         'title': 'Total Blocks Synced',
         'body': "This value indicates the total number of blockchain blocks that have been downloaded, verified, and applied by the node during the measurement period. It is calculated as the difference between the final and initial block height. This metric, in conjunction with the sync time, is fundamental for calculating the overall synchronization speed."
     },
-    'Overall Average Sync Speed [Blocks/sec]': {
-        'title': 'Overall Average Sync Speed [Blocks/sec]',
+    'Overall Average Sync Speed (Blocks/sec)': {
+        'title': 'Overall Average Sync Speed (Blocks/sec)',
         'body': "This is a high-level performance metric calculated by dividing the 'Total Blocks Synced' by the 'Total Sync in Progress Time' in seconds. It provides a single, averaged value representing the node's throughput over the entire synchronization process. While useful for a quick comparison, it can mask variations in performance that occur at different stages of syncing."
     },
-    'Min Sync Speed [Blocks/sec sample]': {
-        'title': 'Min Sync Speed [Blocks/sec Sampled]',
+    'Min Sync Speed (Blocks/sec sample)': {
+        'title': 'Min Sync Speed (Blocks/sec Sampled)',
         'body': "This metric shows the minimum synchronization speed observed between any two consecutive data points in the sample. A very low or zero value can indicate periods of network latency, slow peer response, or high computational load on the node (e.g., during verification of blocks with many complex transactions), causing a temporary stall in progress."
     },
-    'Q1 Sync Speed [Blocks/sec sample]': {
-        'title': 'Q1/25th Percentile Sync Speed [Blocks/sec]',
+    'Q1 Sync Speed (Blocks/sec sample)': {
+        'title': 'Q1/25th Percentile Sync Speed (Blocks/sec)',
         'body': "The 25th percentile (or first quartile, Q1) is the value below which 25% of the synchronization speed samples fall. It indicates the performance level that the node meets or exceeds 75% of the time. A higher Q1 value suggests that the node consistently maintains a good minimum performance level, with fewer periods of very low speed."
     },
-    'Mean Sync Speed [Blocks/sec sample]': {
-        'title': 'Mean Sync Speed [Blocks/sec Sampled]',
+    'Mean Sync Speed (Blocks/sec sample)': {
+        'title': 'Mean Sync Speed (Blocks/sec Sampled)',
         'body': "This represents the statistical average (mean) of the 'Blocks/sec' values calculated for each interval between data points. Unlike the 'Overall Average', this metric is the average of individual speed samples, giving a more granular view of the typical performance, but it can be skewed by extremely high or low outliers."
     },
-    'Median Sync Speed [Blocks/sec sample]': {
-        'title': 'Median Sync Speed [Blocks/sec Sampled]',
+    'Median Sync Speed (Blocks/sec sample)': {
+        'title': 'Median Sync Speed (Blocks/sec Sampled)',
         'body': "The median is the 50th percentile of the sampled 'Blocks/sec' values. It represents the middle value of the performance data, meaning half of the speed samples were higher and half were lower. The median is often a more robust indicator of central tendency than the mean, as it is less affected by extreme outliers or brief performance spikes/dips."
     },
-    'Q3 Sync Speed [Blocks/sec sample]': {
-        'title': 'Q3/75th Percentile Sync Speed [Blocks/sec]',
+    'Q3 Sync Speed (Blocks/sec sample)': {
+        'title': 'Q3/75th Percentile Sync Speed (Blocks/sec)',
         'body': "The 75th percentile (or third quartile, Q3) is the value below which 75% of the synchronization speed samples fall. This metric highlights the performance level achieved during the faster sync periods. A high Q3 value indicates the node's capability to reach high speeds, but it should be considered alongside the median and mean to understand if this is a frequent or occasional event."
     },
-    'Max Sync Speed [Blocks/sec sample]': {
-        'title': 'Max Sync Speed [Blocks/sec Sampled]',
+    'Max Sync Speed (Blocks/sec sample)': {
+        'title': 'Max Sync Speed (Blocks/sec Sampled)',
         'body': "This metric captures the peak synchronization speed achieved between any two consecutive data points. High maximum values typically occur when the node receives a burst of blocks from a fast peer with low latency, often during periods where the blocks being processed are less computationally intensive."
     },
-    'Std Dev of Sync Speed [Blocks/sec sample]': {
-        'title': 'Std Dev of Sync Speed [Blocks/sec Sampled]',
+    'Std Dev of Sync Speed (Blocks/sec sample)': {
+        'title': 'Std Dev of Sync Speed (Blocks/sec Sampled)',
         'body': "The standard deviation measures the amount of variation or dispersion of the sampled 'Blocks/sec' values. A low standard deviation indicates that the sync speed was relatively consistent and stable. A high standard deviation suggests significant volatility in performance, with large fluctuations between fast and slow periods. This can be caused by inconsistent network conditions, varying peer quality, or changes in block complexity."
     },
-    'Skewness of Sync Speed [Blocks/sec sample]': {
-        'title': 'Skewness of Sync Speed [Blocks/sec Sampled]',
+    'Skewness of Sync Speed (Blocks/sec sample)': {
+        'title': 'Skewness of Sync Speed (Blocks/sec Sampled)',
         'body': "Skewness is a measure of the asymmetry of the performance data distribution.\n\n- A value near 0 indicates a roughly symmetrical distribution, where performance fluctuates evenly around the mean.\n- A positive value (right-skewed) suggests that the dataset has a long tail of high-speed values. This means the sync speed is often clustered at lower values with occasional bursts of very high speed.\n- A negative value (left-skewed) indicates a long tail of low-speed values. This typically means the sync speed is consistently high but is occasionally dragged down by periods of slowness."
     },
     'Moving Average Window': {
@@ -748,16 +472,20 @@ tooltip_texts = {
         'title': 'Block Height',
         'body': "The sequential number of a block in the blockchain. It represents a specific point in the history of the ledger. This table shows data sampled at various block heights."
     },
-    'Sync Time [s]': {
-        'title': 'Sync Time [seconds]',
+    'Block Timestamp': {
+        'title': 'Block Timestamp',
+        'body': "The timestamp when the block was created, in seconds since the Signum genesis block. This can be used to analyze the timing of the sync process relative to the blockchain's own timeline."
+    },
+    'Sync Time (s)': {
+        'title': 'Sync Time (seconds)',
         'body': "The total accumulated time in seconds that the node has spent in an active synchronization state up to this specific block height. This is the raw, unformatted value."
     },
-    'Sync Time [Formatted]': {
-        'title': 'Sync Time [Formatted]',
-        'body': "A human-readable representation of the 'Sync Time [s]', formatted as Days-Hours:Minutes:Seconds. This makes it easier to understand longer synchronization durations."
+    'Sync Time (Formatted)': {
+        'title': 'Sync Time (Formatted)',
+        'body': "A human-readable representation of the 'Sync Time (s)', formatted as Days-Hours:Minutes:Seconds. This makes it easier to understand longer synchronization durations."
     },
-    'Sync Speed [Blocks/sec]': {
-        'title': 'Sync Speed [Blocks/sec Instantaneous]',
+    'Sync Speed (Blocks/sec)': {
+        'title': 'Sync Speed (Blocks/sec Instantaneous)',
         'body': "The instantaneous synchronization speed, calculated as the number of blocks processed since the last data point, divided by the time elapsed during that interval. This metric shows the node's performance at a specific moment and can fluctuate based on network conditions and block complexity."
     },
     'Save Filtered Range': {
@@ -772,39 +500,8 @@ tooltip_texts = {
         'title': 'Save As...',
         'body': "Saves the current state of the data as a new CSV file in the `measurements/saved` directory. A timestamp and a unique sequence number will be appended to the filename to prevent overwriting previous saves. Use this to create a new version of the file while preserving the old one."
     }
-,
-    'Distribution Bins': {
-        'title': 'Distribution Bins',
-        'body': "This slider controls the number of bins (columns) used to create the histograms in the distribution chart. A smaller number of bins provides a more general overview of the data distribution, while a larger number reveals more detail but can also appear more noisy. Adjust this to find the best representation for your data."
-    }
-,
-    'distribution-graph-speed-count-title': {
-        'title': 'Sync Speed Distribution (Counts)',
-        'body': "This histogram shows the distribution of synchronization speeds, with the Y-axis representing the absolute count of samples falling into each speed bin. It helps to understand how many times the sync process operated at specific performance levels. A peak in a certain range indicates the most common sync speed."
-    },
-    'distribution-graph-time-delta-count-title': {
-        'title': 'Sync Time Delta Distribution (Counts)',
-        'body': "This histogram displays the distribution of time intervals between consecutive data points, with the Y-axis showing the absolute count of these intervals. It provides insight into the regularity of data sampling. A tall, narrow peak suggests consistent block processing times, while a wide or multi-peaked distribution points to variability in network latency or node processing load."
-    }
-,
-    'progress-graph-title': {
-        'title': 'Block Height and Sync Speed vs. Sync Time',
-        'body': "This chart visualizes the synchronization progress over time.\n\n- The primary Y-axis (left, blue) shows the 'Block Height' of the node, which should increase over time as it syncs.\n- The secondary Y-axis (right, orange/magenta) shows the 'Sync Speed' in Blocks per Second. This includes both the instantaneous speed (dotted line) and a moving average (solid line) to show the trend.\n- The X-axis represents the 'Accumulated Sync in Progress Time' in seconds. This timer is only active when the node is significantly behind the network, providing an accurate measure of the time spent catching up.\n\nThis view is useful for understanding the overall duration of the sync process and identifying how performance changes over time."
-    },
-    'blockheight-vs-speed-graph-title': {
-        'title': 'Sync Time and Sync Speed vs. Block Height',
-        'body': "This chart shows how synchronization time and speed evolve as the node progresses through different block heights.\n\n- The primary Y-axis (left, blue) shows the 'Accumulated Sync in Progress Time' in seconds.\n- The secondary Y-axis (right, orange/magenta) shows the 'Sync Speed' in Blocks per Second, including both instantaneous and moving average values.\n- The X-axis represents the 'Block Height'.\n\nThis view is particularly useful for identifying performance bottlenecks at specific block ranges. For example, a steep increase in sync time or a sharp drop in sync speed at a certain height might indicate a period of blocks with many complex transactions that are computationally expensive to verify."
-    },
-    'distribution-graph-speed-title': {
-        'title': 'Sync Speed Distribution',
-        'body': "This histogram and Kernel Density Estimate (KDE) plot shows the distribution of the instantaneous 'Blocks per Second' sync speed samples.\n\n- The histogram (bars) groups the speed samples into bins, showing the frequency of different performance levels.\n- The KDE curve (line) provides a smoothed estimate of the probability density function of the sync speed.\n\nA distribution skewed to the right (positive skew) indicates that the sync speed is often high, with occasional slower periods. A distribution skewed to the left (negative skew) would suggest consistently high speeds with rare, significant drops. A bell-shaped curve indicates that performance is centered around the average with predictable variations."
-    },
-    'distribution-graph-time-delta-title': {
-        'title': 'Sync Time Delta Distribution',
-        'body': "This histogram and Kernel Density Estimate (KDE) plot shows the distribution of the time elapsed between consecutive data samples (time delta).\n\n- This chart helps to understand the consistency of the data sampling interval. In an ideal scenario with a constant block processing rate, the time deltas would be tightly clustered around a single value.\n- A wide distribution or multiple peaks can indicate network latency, variable peer performance, or fluctuations in the node's processing load, causing delays between block receptions."
-    }
 }
-
+ 
 # --- Prepare initial data for the store if df_progress is loaded ---
 initial_original_data = None
 if not df_progress.empty:
@@ -813,107 +510,196 @@ if not df_progress.empty:
         'data': df_progress.to_json(date_format='iso', orient='split'),
         'metadata': initial_metadata
     }
-
-def filter_df_for_clearing(df):
-    """Keeps header, first row, and every 5000th row."""
+ 
+def average_df_by_chunks(df, chunk_size=5000):
+    """Averages the dataframe in chunks of a given size, preserving the genesis block."""
     if df.empty or 'Block_height' not in df.columns:
         return df
 
-    # Condition: Block_height is a multiple of 5000 OR is 0
-    condition = (df['Block_height'] % 5000 == 0) | (df['Block_height'] == 0)
+    # Separate genesis block if it exists
+    genesis_row = df[df['Block_height'] == 0]
+    df_to_average = df[df['Block_height'] > 0].copy() # Use a copy to avoid side effects
 
-    filtered_df = df[condition]
+    if df_to_average.empty:
+        return genesis_row
 
-    # Sort by block height and reset index to maintain order and remove potential duplicates from concat
-    return filtered_df.sort_values(by='Block_height').drop_duplicates(subset=['Block_height']).reset_index(drop=True)
+    # Define aggregations for known columns
+    aggregations = {
+        'Block_timestamp': 'last',
+        'Cumulative_difficulty': 'last',
+        'Accumulated_sync_time[ms]': 'last',
+        'Accumulated_sync_in_progress_time[ms]': 'last',
+        'Push_block_time[ms]': 'mean',
+        'Validation_time[ms]': 'mean',
+        'Tx_loop_time[ms]': 'mean',
+        'Housekeeping_time[ms]': 'mean',
+        'Tx_apply_time[ms]': 'mean',
+        'AT_time[ms]': 'mean',
+        'Subscription_time[ms]': 'mean',
+        'Block_apply_time[ms]': 'mean',
+        'Commit_time[ms]': 'mean',
+        'Misc_time[ms]': 'mean',
+        'Transaction_count': 'sum',
+        'Block_height': 'last' # Keep last block height to represent the chunk
+    }
 
-def create_combined_summary_table(df_original, df_compare, title_original, title_compare):
-    """Creates a Dash component with a combined summary table of sync metrics."""
+    # Filter out aggregations for columns that don't exist in the dataframe
+    aggregations = {k: v for k, v in aggregations.items() if k in df_to_average.columns}
 
-    # If no data is present at all, return nothing.
-    if df_original.empty and df_compare.empty:
-        return None
+    if not aggregations:
+        return genesis_row
 
-    def get_stats_dict(df):
-        """Helper to calculate stats for a single dataframe, returning both display and raw values."""
-        if df.empty or 'Blocks_per_Second' not in df.columns or len(df) < 2:
-            na_result = {'display': 'N/A', 'raw': None}
-            return {
-            'Total Sync in Progress Time [s]': na_result, 'Total Blocks Synced': na_result, 'Overall Average Sync Speed [Blocks/sec]': na_result,
-            'Min Sync Speed [Blocks/sec sample]': na_result,
-            'Q1 Sync Speed [Blocks/sec sample]': na_result,
-            'Mean Sync Speed [Blocks/sec sample]': na_result,
-            'Median Sync Speed [Blocks/sec sample]': na_result,
-            'Q3 Sync Speed [Blocks/sec sample]': na_result,
-            'Max Sync Speed [Blocks/sec sample]': na_result,
-            'Std Dev of Sync Speed [Blocks/sec sample]': na_result,
-            'Skewness of Sync Speed [Blocks/sec sample]': na_result
-            }
+    # Create a grouper column. Integer division does the chunking.
+    # (df_to_average['Block_height'] - 1) ensures that blocks 1-5000 are in group 0, 5001-10000 in group 1 etc.
+    df_to_average['group'] = ((df_to_average['Block_height'] - 1) // chunk_size)
 
-        bps_series = df['Blocks_per_Second'].iloc[1:]
-        if bps_series.empty:
-            stats = pd.Series(index=['min', '25%', 'mean', '50%', '75%', 'max', 'std'], dtype=float).fillna(0)
-            skewness = 0.0
-        else:
-            stats = bps_series.describe(percentiles=[.25, .75])
-            skewness = bps_series.skew()
+    # Perform aggregation
+    averaged_df = df_to_average.groupby('group').agg(aggregations).reset_index(drop=True)
 
-        # Correctly calculate duration for a slice of data
-        total_sync_seconds = df['Accumulated_sync_in_progress_time[s]'].iloc[-1] - df['Accumulated_sync_in_progress_time[s]'].iloc[0]
-        total_blocks_synced = df['Block_height'].iloc[-1] - df['Block_height'].iloc[0]
-        overall_avg_bps = total_blocks_synced / total_sync_seconds if total_sync_seconds > 0 else 0.0
+    # Combine genesis row with the averaged data
+    return pd.concat([genesis_row, averaged_df], ignore_index=True)
 
+
+def get_stats_dict(df):
+    """Helper to calculate stats for a single dataframe, returning both display and raw values."""
+    if df.empty or len(df) < 2:
+        na_result = {'display': 'N/A', 'raw': None}
         return {
-            'Total Sync in Progress Time [s]': {'display': f"{format_seconds(total_sync_seconds)} ({int(total_sync_seconds)}s)", 'raw': total_sync_seconds},
-            'Total Blocks Synced': {'display': f"{total_blocks_synced:,}", 'raw': float(total_blocks_synced)},
-            'Overall Average Sync Speed [Blocks/sec]': {'display': f"{overall_avg_bps:.2f}", 'raw': overall_avg_bps},
-        'Min Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
-        'Q1 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
-        'Mean Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
-        'Median Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
-        'Q3 Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
-        'Max Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
-        'Std Dev of Sync Speed [Blocks/sec sample]': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
-        'Skewness of Sync Speed [Blocks/sec sample]': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0}
+            'Total Time': na_result,
+            'Total Sync in Progress Time': na_result, 'Total Blocks Synced': na_result, 'Total Transactions': na_result,
+            'Overall Average Sync Speed (Blocks/sec)': na_result,
+            'Min Sync Speed (Blocks/sec sample)': na_result, 'Q1 Sync Speed (Blocks/sec sample)': na_result,
+            'Mean Sync Speed (Blocks/sec sample)': na_result, 'Median Sync Speed (Blocks/sec sample)': na_result,
+            'Q3 Sync Speed (Blocks/sec sample)': na_result, 'Max Sync Speed (Blocks/sec sample)': na_result,
+            'Std Dev of Sync Speed (Blocks/sec sample)': na_result, 'Skewness of Sync Speed (Blocks/sec sample)': na_result,
+            'Avg Push Block Time (ms)': na_result, 'Avg Validation Time (ms)': na_result,
+            'Avg TX Loop Time (ms)': na_result, 'Avg Housekeeping Time (ms)': na_result,
+            'Avg TX Apply Time (ms)': na_result, 'Avg AT Time (ms)': na_result,
+            'Avg Subscription Time (ms)': na_result, 'Avg Block Apply Time (ms)': na_result,
+            'Avg Commit Time (ms)': na_result, 'Avg Misc Time (ms)': na_result
         }
 
+    # BPS stats
+    bps_series = df['Blocks_per_Second'].iloc[1:] if 'Blocks_per_Second' in df.columns else pd.Series(dtype=float)
+    if bps_series.empty:
+        stats = pd.Series(index=['min', '25%', 'mean', '50%', '75%', 'max', 'std'], dtype=float).fillna(0)
+        skewness = 0.0
+    else:
+        stats = bps_series.describe(percentiles=[.25, .75])
+        skewness = bps_series.skew()
+
+    # Time and Block stats
+    time_col = 'Accumulated_sync_in_progress_time[s]'
+
+    # Total Sync in Progress Time
+    total_sync_seconds = df[time_col].iloc[-1] - df[time_col].iloc[0] if time_col in df.columns else 0
+    total_blocks_synced = df['Block_height'].iloc[-1] - df['Block_height'].iloc[0] if 'Block_height' in df.columns else 0
+    overall_avg_bps = total_blocks_synced / total_sync_seconds if total_sync_seconds > 0 else 0.0
+    total_transactions = df['Transaction_count'].sum() if 'Transaction_count' in df.columns else 0
+
+    # Timing stats
+    timing_cols = {
+        'Push Block Time (ms)': 'Push_block_time[ms]',
+            'Validation Time (ms)': 'Validation_time[ms]',
+            'TX Loop Time (ms)': 'Tx_loop_time[ms]',
+            'Housekeeping Time (ms)': 'Housekeeping_time[ms]',
+            'TX Apply Time (ms)': 'Tx_apply_time[ms]',
+            'AT Time (ms)': 'AT_time[ms]',
+            'Subscription Time (ms)': 'Subscription_time[ms]',
+            'Block Apply Time (ms)': 'Block_apply_time[ms]',
+            'Commit Time (ms)': 'Commit_time[ms]',
+            'Misc Time (ms)': 'Misc_time[ms]',
+        }
+    
+    result = {
+        'Total Sync in Progress Time': {'display': f"{format_seconds(total_sync_seconds)} ({int(total_sync_seconds)}s)", 'raw': total_sync_seconds},
+        'Total Blocks Synced': {'display': f"{total_blocks_synced:,}", 'raw': float(total_blocks_synced)},
+        'Total Transactions': {'display': f"{total_transactions:,}", 'raw': float(total_transactions)},
+        'Overall Average Sync Speed (Blocks/sec)': {'display': f"{overall_avg_bps:.2f}", 'raw': overall_avg_bps},
+        'HEADER_Sync Speed (Blocks/sec sample)': {'display': '', 'raw': None},
+        'Min - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)},
+        'Q1 - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('25%', 0):.2f}", 'raw': stats.get('25%', 0.0)},
+        'Mean - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)},
+        'Median - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)},
+        'Q3 - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('75%', 0):.2f}", 'raw': stats.get('75%', 0.0)},
+        'Max - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)},
+        'Std Dev - Sync Speed (Blocks/sec sample)': {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)},
+        'Skewness - Sync Speed (Blocks/sec sample)': {'display': f"{skewness:.2f}", 'raw': skewness if pd.notna(skewness) else 0.0}
+    }
+    for display_name, col_name in timing_cols.items():
+        result[f'HEADER_{display_name}'] = {'display': '', 'raw': None}
+        series = df[col_name] if col_name in df.columns and not df[col_name].empty else pd.Series(dtype=float)
+        
+        if series.empty:
+            stats = pd.Series(index=['min', 'max', 'mean', '50%', 'std'], dtype=float).fillna(0)
+        else:
+            stats = series.describe(percentiles=[.5])
+
+        result[f'Min - {display_name}'] = {'display': f"{stats.get('min', 0):.2f}", 'raw': stats.get('min', 0.0)}
+        result[f'Max - {display_name}'] = {'display': f"{stats.get('max', 0):.2f}", 'raw': stats.get('max', 0.0)}
+        result[f'Mean - {display_name}'] = {'display': f"{stats.get('mean', 0):.2f}", 'raw': stats.get('mean', 0.0)}
+        result[f'Median - {display_name}'] = {'display': f"{stats.get('50%', 0):.2f}", 'raw': stats.get('50%', 0.0)}
+        result[f'Std Dev - {display_name}'] = {'display': f"{stats.get('std', 0):.2f}", 'raw': stats.get('std', 0.0)}
+
+    return result
+
+def create_combined_summary_table(df_original=pd.DataFrame(), df_compare=pd.DataFrame(), title_original="Original", title_compare="Comparison"): # type: ignore
+    """Creates a Dash component with a combined summary table of sync metrics."""
+
+    stats_original = get_stats_dict(df_original) if not df_original.empty else {}
     has_original = not df_original.empty
     has_comparison = not df_compare.empty
 
-    stats_original = get_stats_dict(df_original) if has_original else {}
-    stats_compare = get_stats_dict(df_compare) if has_comparison else {}
-
-    # Use a fixed list of metrics to ensure consistent order and display
-    metric_names = [
-        'Total Sync in Progress Time [s]', 'Total Blocks Synced', 'Overall Average Sync Speed [Blocks/sec]',
-        'Min Sync Speed [Blocks/sec sample]', 'Q1 Sync Speed [Blocks/sec sample]',
-        'Mean Sync Speed [Blocks/sec sample]', 'Median Sync Speed [Blocks/sec sample]',
-        'Q3 Sync Speed [Blocks/sec sample]', 'Max Sync Speed [Blocks/sec sample]',
-        'Std Dev of Sync Speed [Blocks/sec sample]', 'Skewness of Sync Speed [Blocks/sec sample]'
+    metric_order = [
+        'Total Sync in Progress Time', 'Total Blocks Synced', 'Total Transactions',
+        'Overall Average Sync Speed (Blocks/sec)',
+        'HEADER_Sync Speed (Blocks/sec sample)',
+        'Min Sync Speed (Blocks/sec sample)', 'Q1 Sync Speed (Blocks/sec sample)',
+        'Mean Sync Speed (Blocks/sec sample)', 'Median Sync Speed (Blocks/sec sample)',
+        'Q3 Sync Speed (Blocks/sec sample)', 'Max Sync Speed (Blocks/sec sample)',
+        'Std Dev of Sync Speed (Blocks/sec sample)', 'Skewness of Sync Speed (Blocks/sec sample)'
     ]
+    timing_cols_keys = [
+        'Push Block Time (ms)', 'Validation Time (ms)', 'TX Loop Time (ms)', 'Housekeeping Time (ms)',
+        'TX Apply Time (ms)', 'AT Time (ms)', 'Subscription Time (ms)', 'Block Apply Time (ms)',
+        'Commit Time (ms)', 'Misc Time (ms)'
+    ]
+    stats_keys = ['Min', 'Max', 'Mean', 'Median', 'Std Dev']
+    for name in timing_cols_keys:
+        metric_order.append(f'HEADER_{name}')
+        for stat in stats_keys:
+            metric_order.append(f'{stat} - {name}')
+    
+    metric_names = metric_order
 
     header_cells = [html.Th("Metric")]
     if has_original:
         header_cells.append(html.Th(title_original, style={'wordBreak': 'break-all'}))
     if has_comparison:
+        stats_compare = get_stats_dict(df_compare)
         header_cells.append(html.Th(title_compare, style={'wordBreak': 'break-all'}))
 
     table_header = [html.Thead(html.Tr(header_cells))]
     
     # Define which metrics are better when higher
     higher_is_better = {
-        'Total Sync in Progress Time [s]': False,
+        'Total Sync in Progress Time': False,
         'Total Blocks Synced': True,
-        'Overall Average Sync Speed [Blocks/sec]': True,
-        'Min Sync Speed [Blocks/sec sample]': True,
-        'Q1 Sync Speed [Blocks/sec sample]': True,
-        'Mean Sync Speed [Blocks/sec sample]': True,
-        'Median Sync Speed [Blocks/sec sample]': True,
-        'Q3 Sync Speed [Blocks/sec sample]': True,
-        'Max Sync Speed [Blocks/sec sample]': True,
-        'Std Dev of Sync Speed [Blocks/sec sample]': False,
-        'Skewness of Sync Speed [Blocks/sec sample]': 'closer_to_zero',
+        'Total Transactions': True,
+        'Overall Average Sync Speed (Blocks/sec)': True,
+        'Min Sync Speed (Blocks/sec sample)': True,
+        'Q1 Sync Speed (Blocks/sec sample)': True,
+        'Mean Sync Speed (Blocks/sec sample)': True,
+        'Median Sync Speed (Blocks/sec sample)': True,
+        'Q3 Sync Speed (Blocks/sec sample)': True,
+        'Max Sync Speed (Blocks/sec sample)': True,
+        'Std Dev of Sync Speed (Blocks/sec sample)': False,
+        'Skewness of Sync Speed (Blocks/sec sample)': 'closer_to_zero',
     }
+    for name in timing_cols_keys:
+        for stat in stats_keys:
+            metric_name = f'{stat} - {name}'
+            higher_is_better[metric_name] = False # Lower is better for all timing stats
 
     table_body_rows = []
     for metric in metric_names:
@@ -921,7 +707,7 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
         title = info.get('title', metric)
         if metric in tooltip_texts:
             info_icon = html.Span([
-                "\u00A0",  # Non-breaking space
+                " ",
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
                 id={'type': 'info-icon', 'metric': metric}, # type: ignore
@@ -964,9 +750,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
                     elif is_better is False: color_class = "text-danger"
 
                     if color_class:
-                        if metric == 'Total Sync in Progress Time [s]':
+                        if metric == 'Total Sync in Progress Time':
                             sign = "+" if diff > 0 else "-"
-                            diff_str = f"{sign}{format_seconds(abs(diff))} [{sign}{int(abs(diff))}s]"
+                            diff_str = f"{sign}{format_seconds(abs(diff))} ({sign}{int(abs(diff))}s)"
                         else:
                             diff_str = f"{diff:+.2f}" if not isinstance(diff, str) else diff
                         original_cell_content.append(html.Span(f" ({diff_str})", className=f"small {color_class} fw-bold"))
@@ -1010,9 +796,9 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
                 # Format difference string
                 if metric == 'Total Blocks Synced':
                     diff_str = f"{diff:+,}"
-                elif metric == 'Total Sync in Progress Time [s]':
+                elif metric == 'Total Sync in Progress Time':
                     sign = "+" if diff > 0 else "-"
-                    diff_str = f"{sign}{format_seconds(abs(diff))} [{sign}{int(abs(diff))}s]"
+                    diff_str = f"{sign}{format_seconds(abs(diff))} ({sign}{int(abs(diff))}s)"
                 else:
                     diff_str = f"{diff:+.2f}"
 
@@ -1027,54 +813,59 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
 
     return html.Div([
         html.H5("Metrics Summary", className="mt-4"),
-        dbc.Table(table_header + table_body, striped=True, bordered=True, hover=True, className="mt-2", responsive=True)
+        dbc.Table(table_header + table_body, striped=True, bordered=True, hover=True, className="mt-2")
     ])
 
 def process_progress_df(df, filename=""):
-    """
-    Adds calculated columns to the progress dataframe.
-    It dynamically detects the time column and its unit ([s] or [ms]) and normalizes it to seconds.
-    """
+    """Adds calculated columns to the measurement dataframe."""
     if df.empty:
         return df
 
-    # Find the time column by pattern matching
-    time_col_pattern = re.compile(r'Accumulated_sync_in_progress_time\[(s|ms)\]')
-    time_col = None
-    unit = None
-    for col in df.columns:
-        match = time_col_pattern.match(col)
-        if match:
-            time_col = col
-            unit = match.group(1)
-            break
+    # For BPS calculation, we need the 'in_progress' time.
+    # NOTE: Due to a bug in some node versions, for sync_measurement.csv,
+    # the 'Accumulated_sync_time[ms]' column actually contains the "in-progress" time data,
+    # while the header is swapped with 'Accumulated_sync_in_progress_time[ms]'.
+    # This logic prioritizes the correct column for BPS calculation.
+    
+    time_col_s = 'Accumulated_sync_in_progress_time[s]'
+    
+    # This column has the correct 'in-progress' data due to the bug in sync_measurement.csv
+    sync_in_progress_col_ms_bugged = 'Accumulated_sync_time[ms]'
+    # This would be the correct column in a fixed sync_measurement.csv
+    sync_in_progress_col_ms_correct = 'Accumulated_sync_in_progress_time[ms]'
 
-    if not time_col:
-        print(f"Warning: DataFrame from '{filename}' does not contain a recognized time column.")
+    time_col = None
+
+    if sync_in_progress_col_ms_bugged in df.columns:
+        # Handle the bugged case: use the data from the 'total time' column for 'in-progress' calculations
+        df[time_col_s] = df[sync_in_progress_col_ms_bugged] / 1000
+        time_col = time_col_s
+    elif sync_in_progress_col_ms_correct in df.columns:
+        # Fallback for a potentially fixed file in the future.
+        df[time_col_s] = df[sync_in_progress_col_ms_correct] / 1000
+        time_col = time_col_s
+    else:
+        print(f"Warning: DataFrame from '{filename}' does not contain a recognized time column for sync speed calculation.")
         return df
 
     if 'Block_height' not in df.columns:
         print(f"Warning: DataFrame from '{filename}' does not contain 'Block_height' column.")
         return df
-    
-    # Normalize time to seconds and create a consistent column name for it
-    time_in_seconds_col = 'Accumulated_sync_in_progress_time[s]'
-    if unit == 'ms':
-        df[time_in_seconds_col] = df[time_col] / 1000
 
-    df['SyncTime_Formatted'] = df[time_in_seconds_col].apply(format_seconds)
+    df['SyncTime_Formatted'] = df[time_col].apply(format_seconds)
     delta_blocks = df['Block_height'].diff()
-    delta_time = df[time_in_seconds_col].diff()
+    delta_time = df[time_col].diff()
     df['Blocks_per_Second'] = (delta_blocks / delta_time.replace(0, pd.NA)).fillna(0)
+
+    if 'Block_timestamp' in df.columns:
+        df['Block_timestamp_date'] = df['Block_timestamp'].apply(
+            lambda ts: (SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(ts))).strftime('%Y-%m-%d %H:%M:%S UTC') if pd.notna(ts) else ''
+        )
     return df
 
 # --- Moving Average Window Values ---
 ma_windows = [10, 100, 200, 300, 400, 500]
 ma_marks = {i: str(v) for i, v in enumerate(ma_windows)}
-
-# --- Distribution Bins Values ---
-dist_bins_values = [10, 100, 200, 300, 400, 500]
-dist_bins_marks = {i: str(v) for i, v in enumerate(dist_bins_values)}
 
 
 # --- Dash App Initialization ---
@@ -1084,7 +875,7 @@ app = dash.Dash(
         dbc.themes.BOOTSTRAP,
         "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"
     ],
-    title="Sync Progress Reports"
+    title="Sync Measurement Analyzer"
 )
 
 # --- Common Styles ---
@@ -1126,24 +917,24 @@ app.layout = html.Div([
     dcc.Graph(id='upload-callback-output', style={'display': 'none'}),
     dcc.Graph(id='clear-callback-output', style={'display': 'none'}),
     dcc.Graph(id='main-callback-output', style={'display': 'none'}),
+    dcc.Graph(id='save-callback-output', style={'display': 'none'}),
     dcc.Store(id='original-data-store', data=initial_original_data),
     dcc.Store(id='compare-data-store'), # No initial data for comparison
     dcc.Store(id='action-feedback-store'), # For modal feedback
     dcc.Store(id='unsaved-changes-store', data={'Original': False, 'Comparison': False}),
     dcc.Store(id='reset-upload-store'), # To trigger clientside upload reset
-    dcc.Store(id='html-content-store'), # For saving HTML content from clientside callback
-    dcc.Store(id='clientside-script-store'), # To confirm clientside script is loaded
+    dcc.Store(id='html-content-store'), # For saving HTML content
         dbc.Row([
-        dbc.Col(html.H1("Sync Progress Reports", className="mt-3 mb-4"), width="auto", className="me-auto"),
-        dbc.Col([
+        dbc.Col(html.H1("Sync Measurement Analyzer", className="mt-3 mb-4"), width="auto", className="me-auto"),
+        dbc.Col([ # type: ignore
             dbc.Button(html.I(className="bi bi-save"), id="save-button", color="secondary", className="me-3", title="Save Reports as HTML"),
-            html.I(className="bi bi-sun-fill", style={'color': 'orange', 'fontSize': '1.2rem', 'verticalAlign': 'middle'}),
+            html.I(className="bi bi-sun-fill", style={'color': 'orange', 'fontSize': '1.2rem'}),
             dbc.Switch(id="theme-switch", value=True, className="d-inline-block mx-2"),
             html.I(className="bi bi-moon-stars-fill", style={'color': 'royalblue', 'fontSize': '1.2rem'}),
         ], width="auto", className="d-flex align-items-center mt-3")
     ], align="center"),
 
-    dbc.Alert(
+    dbc.Alert( # type: ignore
         "Original 'sync_progress.csv' not found in 'measurements' folder. Please place it there or upload a file to begin.",
         id="no-file-alert",
         color="warning",
@@ -1155,14 +946,14 @@ app.layout = html.Div([
             html.Div([
                 html.Div(dcc.Upload(
                     id='upload-original-progress',
-                    children=html.Div(['Drag and Drop or ', html.A('Select Original sync_progress.csv')]),
+                    children=html.Div(['Drag and Drop or ', html.A('Select Original sync_measurement.csv')]),
                     style=upload_style,
                     multiple=False,
                 ), style={'flexGrow': 1}),
                 dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-original-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-original-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
                 html.Span([ # type: ignore
-                    "\u00A0",  # Non-breaking space
+                    " ",
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                 ],
                     id={'type': 'info-icon', 'metric': 'Original File'}, # type: ignore
@@ -1182,54 +973,35 @@ app.layout = html.Div([
                 ), style={'flexGrow': 1}),
                 dbc.Button(html.I(className="bi bi-arrow-clockwise"), id="reload-compare-button", color="primary", outline=True, className="ms-2", style={'display': 'none'}, title="Reload this file"),
                 dbc.Button(html.I(className="bi bi-trash-fill"), id="discard-compare-button", color="danger", outline=True, className="ms-2", style={'display': 'none'}, title="Discard this file"),
-                html.Span([ "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}), ], id={'type': 'info-icon', 'metric': 'Comparison File'}, style={'cursor': 'pointer', 'marginLeft': '10px'}, title='Click for more info', n_clicks=0), # type: ignore
+                html.Span([ " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}), ], id={'type': 'info-icon', 'metric': 'Comparison File'}, style={'cursor': 'pointer', 'marginLeft': '10px'}, title='Click for more info', n_clicks=0), # type: ignore
             ], style={'display': 'flex', 'alignItems': 'center'}, id='compare-upload-container'),
             html.Div(id='compare-metadata-display', className="mt-3")
         ]),
     ]),
     html.Div([
-        html.Div(id="progress-graph-title", className="mt-4"),
-        dcc.Graph(id="progress-graph"),
+        dcc.Graph(id="progress-graph", className="my-4"),
         html.Div([
-            html.Label("Moving Average Window:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window-1'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="ma-window-slider-1", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
-        html.Div(id="blockheight-vs-speed-graph-title", className="mt-4"),
-        dcc.Graph(id="blockheight-vs-speed-graph"),
-        html.Div([
-            html.Label("Moving Average Window:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Moving Average Window-2'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="ma-window-slider-2", min=0, max=len(ma_windows) - 1, value=1, marks=ma_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
-        html.Div(id="distribution-graph-speed-title", className="mt-4"),
-        dcc.Graph(id="distribution-graph-speed"),
-        html.Div([
-            html.Label("Distribution Bins:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-1'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="distribution-bins-slider-1", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
-        html.Div(id="distribution-graph-time-delta-title", className="mt-4"),
-        dcc.Graph(id="distribution-graph-time-delta"),
-        html.Div([
-            html.Label("Distribution Bins:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-2'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="distribution-bins-slider-2", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
-        html.Div(id="distribution-graph-speed-count-title", className="mt-4"),
-        dcc.Graph(id="distribution-graph-speed-count"),
-        html.Div([
-            html.Label("Distribution Bins:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-3'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="distribution-bins-slider-3", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
-        html.Div(id="distribution-graph-time-delta-count-title", className="mt-4"),
-        dcc.Graph(id="distribution-graph-time-delta-count"),
-        html.Div([
-            html.Label("Distribution Bins:", className="me-2"),
-            html.Span([html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})], id={'type': 'info-icon', 'metric': 'Distribution Bins-4'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0),
-            html.Div(dcc.Slider(id="distribution-bins-slider-4", min=0, max=len(dist_bins_values) - 1, value=1, marks=dist_bins_marks, step=None), style={'width': '250px', 'marginLeft': '10px'})
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '10px', 'justifyContent': 'flex-start'}),
+            html.Label("Moving Average Window:", style={'marginRight': '5px'}),
+            html.Span([
+                " ",
+                html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+            ],
+            id={'type': 'info-icon', 'metric': 'Moving Average Window'},
+            style={'cursor': 'pointer', 'marginRight': '10px'},
+            title='Click for more info',
+            n_clicks=0
+            ), # type: ignore
+            html.Div(
+                dcc.Slider(
+                    id="ma-window-slider-progress",
+                    min=0,
+                    max=len(ma_windows) - 1,
+                    value=1, # Default to 100
+                    marks=ma_marks,
+                    step=None,
+                ), style={'width': '200px'}
+            )
+        ], style={'display': 'flex', 'alignItems': 'center', 'marginTop': '20px'}, id="ma-slider-container"),
         html.Div(id="total-time-display-container"),
         html.Hr(),
         html.H3("Raw Data View", className="mt-4"),
@@ -1238,6 +1010,19 @@ app.layout = html.Div([
                 label="Show Raw Data Table",
                 value=True,
             )], id='show-data-table-switch-container'),
+        html.Div(id='raw-data-controls-container', children=[
+            dcc.Checklist(
+                id='raw-data-column-checklist',
+                options=[
+                    {'label': ' Block Timestamp (s)', 'value': 'Block_timestamp'},
+                    {'label': ' Sync Time (s)', 'value': 'Accumulated_sync_in_progress_time[s]'},
+                    {'label': ' Sync Time (Formatted)', 'value': 'SyncTime_Formatted'},
+                    {'label': ' Sync Speed (Blocks/sec)', 'value': 'Blocks_per_Second'},
+                ],
+                value=['Block_timestamp', 'SyncTime_Formatted', 'Blocks_per_Second'], # Default visible columns
+                className="custom-checklist mt-2 mb-2"
+            )
+        ], style={'display': 'none'}), # Initially hidden
         html.Div(id='data-table-container'),
     ]),
 
@@ -1277,12 +1062,12 @@ app.layout = html.Div([
      Input('upload-original-progress', 'filename')],
     [State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
-)
+) # type: ignore
 def store_original_data(contents, filename, unsaved_data):
-    if not contents:
+    if not contents or not filename:
         return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
-    loading_data = {'loading': True, 'message': 'Processing: sync_progress.csv'}
+    loading_data = {'loading': True, 'message': 'Feldolgozás: sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -1295,10 +1080,8 @@ def store_original_data(contents, filename, unsaved_data):
         df.columns = df.columns.str.strip() # Sanitize column names
 
         # Check for essential columns
-        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
-        if not all(col in df.columns for col in required_cols):
-            missing_cols = [col for col in required_cols if col not in df.columns]
-            raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
+        if not any(col in df.columns for col in ['Accumulated_sync_time[ms]', 'Accumulated_sync_in_progress_time[ms]']) or 'Block_height' not in df.columns:
+            raise ValueError("The uploaded file is missing essential columns like 'Block_height' and a recognized time column. Please check the file format.")
         # Store absolute path if not already absolute (assume saved folder)
         if not os.path.isabs(filename):
             abs_path = os.path.join(SCRIPT_DIR, "measurements", "saved", filename)
@@ -1335,7 +1118,7 @@ def store_compare_data(contents, filename, unsaved_data):
     if not contents:
         return dash.no_update, dash.no_update, dash.no_update, {'loading': False, 'message': ''}, dash.no_update
     # Set loading overlay ON
-    loading_data = {'loading': True, 'message': 'Processing: comparison sync_progress.csv'}
+    loading_data = {'loading': True, 'message': 'Feldolgozás: összehasonlító sync_progress.csv'}
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     try:
@@ -1348,10 +1131,8 @@ def store_compare_data(contents, filename, unsaved_data):
         df.columns = df.columns.str.strip() # Sanitize column names
 
         # Check for essential columns
-        required_cols = ['Block_height', 'Accumulated_sync_in_progress_time[s]']
-        if not all(col in df.columns for col in required_cols):
-            missing_cols = [col for col in required_cols if col not in df.columns]
-            raise ValueError(f"The uploaded file is missing essential columns: {', '.join(missing_cols)}. Please check the file format.")
+        if not any(col in df.columns for col in ['Accumulated_sync_time[ms]', 'Accumulated_sync_in_progress_time[ms]']) or 'Block_height' not in df.columns:
+            raise ValueError("The uploaded file is missing essential columns like 'Block_height' and a recognized time column. Please check the file format.")
         # Store absolute path if not already absolute (assume saved folder)
         if not os.path.isabs(filename):
             abs_path = os.path.join(SCRIPT_DIR, "measurements", "saved", filename)
@@ -1403,7 +1184,7 @@ def update_loading_overlay(loading_data):
     [State('original-data-store', 'data'),
      State('compare-data-store', 'data'),
      State('unsaved-changes-store', 'data')],
-    prevent_initial_call=True
+    prevent_initial_call=True # type: ignore
 )
 def clear_csv_data(n_clicks_list, original_data, compare_data, unsaved_data):
     ctx = dash.callback_context
@@ -1453,8 +1234,8 @@ def clear_csv_data(n_clicks_list, original_data, compare_data, unsaved_data):
     Input('original-data-store', 'data')
 )
 def update_original_upload_text(data):
-    """Updates the text of the original upload component based on whether data is loaded."""
-    if data and data.get('filename'):
+    """Updates the text of the original upload component based on whether data is loaded.""" # type: ignore
+    if data and data.get('filename'): # type: ignore
         return html.Div(f"Selected Original file: {data['filename']}", style={'wordBreak': 'break-all'})
     return html.Div(['Drag and Drop or ', html.A('Select Original sync_progress.csv')])
 
@@ -1466,10 +1247,11 @@ def update_compare_upload_text(data):
     """Updates the text of the comparison upload component based on whether data is loaded."""
     if data and data.get('filename'):
         return html.Div(f"Selected Comparison file: {data['filename']}", style={'wordBreak': 'break-all'})
-    return html.Div(['Drag and Drop or ', html.A('Select Comparison sync_progress.csv')])
+    return html.Div(['Drag and Drop or ', html.A('Select Comparison sync_measurement.csv')])
 
 @app.callback(
     [Output('original-data-store', 'data'),
+     Output('upload-original-progress', 'contents', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('discard-original-button', 'n_clicks'),
     State('unsaved-changes-store', 'data'),
@@ -1478,12 +1260,12 @@ def update_compare_upload_text(data):
 def discard_original_data(n_clicks, unsaved_data):
     """Clears the original data store and resets the upload component when the discard button is clicked."""
     if not n_clicks:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     
     new_unsaved_data = unsaved_data.copy()
     new_unsaved_data['Original'] = False
     # Setting store to None clears data, setting contents to None resets the Upload component
-    return None, new_unsaved_data
+    return None, None, new_unsaved_data
 
 @app.callback(
     [Output('compare-data-store', 'data', allow_duplicate=True),
@@ -1581,11 +1363,10 @@ def reload_original_data(n_clicks, store_data, unsaved_data):
      Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True)],
     Input('reload-compare-button', 'n_clicks'),
-    [State('compare-data-store', 'data'),
-     State('unsaved-changes-store', 'data')],
+    State('compare-data-store', 'data'),
     prevent_initial_call=True
 )
-def reload_compare_data(n_clicks, store_data, unsaved_data):
+def reload_compare_data(n_clicks, store_data):
     if not n_clicks or not store_data or not store_data.get('filename'):
         raise dash.exceptions.PreventUpdate
     
@@ -1605,26 +1386,16 @@ def reload_compare_data(n_clicks, store_data, unsaved_data):
     if new_store_data:
         new_store_data['filename'] = filepath
         # Since we are reloading, this file is now considered "saved"
-        new_unsaved_data = unsaved_data.copy()
-        new_unsaved_data['Comparison'] = False
-        return new_store_data, feedback, new_unsaved_data
+        # We need to read the current state of unsaved changes and update it.
+        current_unsaved = dash.callback_context.states['unsaved-changes-store.data']
+        current_unsaved['Comparison'] = False
+        return new_store_data, feedback, current_unsaved
     else:
         return dash.no_update, feedback, dash.no_update
 
 # --- Callback to Update Progress Graph ---
 @app.callback(
     [Output("progress-graph", "figure"),
-     Output("blockheight-vs-speed-graph", "figure"),
-     Output("distribution-graph-speed", "figure"), # type: ignore
-     Output("distribution-graph-time-delta", "figure"), # type: ignore
-     Output("distribution-graph-speed-count", "figure"), # type: ignore
-     Output("distribution-graph-time-delta-count", "figure"), # type: ignore
-     Output("progress-graph-title", "children"),
-     Output("blockheight-vs-speed-graph-title", "children"),
-     Output("distribution-graph-speed-title", "children"),
-     Output("distribution-graph-time-delta-title", "children"),
-     Output("distribution-graph-speed-count-title", "children"),
-     Output("distribution-graph-time-delta-count-title", "children"),
      Output("total-time-display-container", "children"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "options"),
      Output({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, "value"),
@@ -1633,27 +1404,33 @@ def reload_compare_data(n_clicks, store_data, unsaved_data):
      Output("main-callback-output", "figure"),
      Output("data-table-container", "children"),
      Output("data-table-container", "style"),
+     Output("raw-data-controls-container", "style"),
     ],
-    [Input("ma-window-slider-1", "value"), # 0
-     Input("distribution-bins-slider-1", "value"),
+    [Input("ma-window-slider-progress", "value"),
      Input('original-data-store', 'data'),
      Input('compare-data-store', 'data'),
      Input({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
      Input({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
      Input({'type': 'reset-view-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input('show-data-table-switch', 'value'),
-     Input('theme-store', 'data')],
+     Input('raw-data-column-checklist', 'value'),
+     Input('theme-store', 'data'),
+     Input('progress-graph', 'restyleData')],
+    [State('progress-graph', 'figure')],
+    prevent_initial_call=True
 )
-def update_progress_graph_and_time(window_index, bins_index, original_data, compare_data,
+def update_progress_graph_and_time(window_index, original_data, compare_data, # type: ignore
                                    start_block_vals, end_block_vals, reset_clicks,
-                                   show_data_table, theme):
-    window = ma_windows[window_index]
+                                   show_data_table, selected_columns, theme, restyle_data, existing_figure):
+    loading_message = {'loading': True, 'message': 'Processing data and generating graphs...'}
+    
     ctx = dash.callback_context
 
     # --- Define colors based on theme ---
     is_dark_theme = theme != 'light'
     original_bps_color = '#b86e1e' if is_dark_theme else '#FF8C00'  # Muted orange for dark theme (was 'darkorange')
     original_ma_color = '#e0943b' if is_dark_theme else 'orange'      # Muted Amber for dark theme
+    timestamp_color = '#d62728' if is_dark_theme else '#d62728' # Red
     hover_label_style = dict(bgcolor="rgba(255, 255, 255, 0.8)", font=dict(color='black'))
     
     background_style = {}
@@ -1661,23 +1438,45 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         hover_label_style = dict(bgcolor="rgba(34, 37, 41, 0.9)", font=dict(color='white'))
         background_style = {'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)'}
 
+    # --- Handle legend click (restyleData) ---
+    if ctx.triggered_id == 'progress-graph' and restyle_data and existing_figure:
+        # restyle_data is a list: [{'visible': ['legendonly']}, [trace_index]]
+        update_spec, trace_indices = restyle_data
+        
+        if 'visible' in update_spec:
+            new_visibility = update_spec['visible'][0]
+            # Check if any of the Block Timestamp traces are being toggled
+            # These will be traces with yaxis='y3'
+            for i in trace_indices:
+                if 'data' in existing_figure and i < len(existing_figure['data']) and existing_figure['data'][i].get('yaxis') == 'y3':
+                    existing_figure['layout']['yaxis3']['visible'] = (new_visibility == True)
+        
+        # When only handling a restyle, we must return no_update for all other outputs.
+        # For pattern-matching ALL outputs, this must be a list of no_updates.
+        num_start_dropdowns = len(ctx.outputs_list[2])
+        num_end_dropdowns = len(ctx.outputs_list[4])
+        
+        return (existing_figure, dash.no_update, [dash.no_update] * num_start_dropdowns, [dash.no_update] * num_start_dropdowns, 
+                [dash.no_update] * num_end_dropdowns, [dash.no_update] * num_end_dropdowns, dash.no_update, dash.no_update, dash.no_update, dash.no_update)
+
     # --- Map inputs to prefixes ---
     # The order of inputs is: ma-slider, original-data, compare-data, start-block-vals, end-block-vals, ...
-    start_block_inputs = {} # start-block-dropdown values
-    if ctx.inputs_list[4]: # Input index for start-block-dropdown
-        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]} # type: ignore
+    start_block_inputs = {}
+    if ctx.inputs_list[3]:
+        start_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[3]}
 
-    end_block_inputs = {} # end-block-dropdown values
-    if ctx.inputs_list[5]: # Input index for end-block-dropdown
-        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[5]} # type: ignore
+    end_block_inputs = {}
+    if ctx.inputs_list[4]:
+        end_block_inputs = {item['id']['prefix']: item.get('value') for item in ctx.inputs_list[4]}
 
+ 
     def create_header_with_tooltip(text, metric_id, style=None):
         if metric_id in tooltip_texts:
-            info_icon = html.Span([ # type: ignore
-                "\u00A0",  # Non-breaking space
+            info_icon = html.Span([
+                " ",
                 html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
             ],
-                id={'type': 'info-icon', 'metric': metric_id}, # type: ignore
+                id={'type': 'info-icon', 'metric': metric_id},
                 style={'cursor': 'pointer'},
                 title='Click for more info'
             )
@@ -1686,18 +1485,6 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    def create_chart_title_with_icon(title_text, metric_id):
-        """Creates a title component with an info icon."""
-        if metric_id in tooltip_texts:
-            return html.Div([ # type: ignore
-                html.H5(title_text, style={'display': 'inline-block', 'marginRight': '10px'}),
-                html.Span([html.I(className="bi bi-info-circle-fill text-info")],
-                          id={'type': 'info-icon', 'metric': metric_id}, # type: ignore
-                          style={'cursor': 'pointer', 'fontSize': '1.1em'}, title='Click for more info')
-            ], style={'textAlign': 'center'})
-        return html.H5(title_text, style={'textAlign': 'center'})
-
 
     # --- Load and process data from stores ---
     df_progress_local = pd.DataFrame()
@@ -1719,24 +1506,23 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     if df_progress_local.empty and df_compare.empty:
         graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
         empty_fig = go.Figure()
-        empty_fig.update_layout( # type: ignore
+        empty_fig.update_layout(
             title_text='Upload a sync_progress.csv file to begin',
             template=graph_template,
             **background_style
         )
         summary_table = create_combined_summary_table(pd.DataFrame(), pd.DataFrame(), "Original", "Comparison")
         
-        # Correctly form empty outputs for pattern-matching callbacks by inspecting the full output list spec
-        num_start_dds = len(ctx.outputs_list[13])
-        num_start_vals_dds = len(ctx.outputs_list[14])
-        num_end_dds = len(ctx.outputs_list[15])
-        num_end_vals_dds = len(ctx.outputs_list[16])
+        # Correctly form empty outputs for pattern-matching callbacks
+        num_start_dds = len(ctx.outputs_list[2])
+        num_end_dds = len(ctx.outputs_list[4])
+        
         empty_start_opts = [[] for _ in range(num_start_dds)]
-        empty_start_vals = [None] * num_start_vals_dds
+        empty_start_vals = [None for _ in range(num_start_dds)]
         empty_end_opts = [[] for _ in range(num_end_dds)]
-        empty_end_vals = [None] * num_end_vals_dds
-        # Return empty titles as well
-        return empty_fig, empty_fig, empty_fig, empty_fig, empty_fig, empty_fig, None, None, None, None, None, None, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}
+        empty_end_vals = [None for _ in range(num_end_dds)] # type: ignore
+
+        return empty_fig, summary_table, empty_start_opts, empty_start_vals, empty_end_opts, empty_end_vals, {}, None, {'display': 'none'}, {'display': 'none'}
     # --- Process full dataframes first to get Blocks_per_Second ---
     if not df_progress_local.empty:
         df_progress_local = process_progress_df(df_progress_local, original_filename)
@@ -1754,7 +1540,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     is_reset = isinstance(triggered_id, dict) and triggered_id.get('type') == 'reset-view-button'
 
     # --- Calculate ranges and options for each file ---
-    for prefix_str, info in data_map.items():
+    for prefix, info in data_map.items():
         df = info['df']
         if not df.empty:
             min_block = df['Block_height'].min()
@@ -1763,11 +1549,11 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             unique_heights = sorted(df['Block_height'].unique())
             info['options'] = [{'label': f"{int(h):,}", 'value': h} for h in unique_heights]
             
-            current_start = start_block_inputs.get(prefix_str)
-            current_end = end_block_inputs.get(prefix_str)
+            current_start = start_block_inputs.get(prefix)
+            current_end = end_block_inputs.get(prefix)
 
             # Determine start and end blocks based on context
-            if is_reset and triggered_id.get('prefix') == prefix_str:
+            if is_reset and triggered_id.get('prefix') == prefix:
                 info['start_block'] = min_block
                 info['end_block'] = max_block
             elif is_upload_or_clear or current_start is None or current_end is None:
@@ -1794,17 +1580,20 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
     # --- Plot Original Data ---
     if not df_original_display.empty:
-        df_original_display['BPS_ma'] = df_original_display['Blocks_per_Second'].rolling(window=window, min_periods=1).mean()
+        df_original_display['BPS_ma'] = df_original_display['Blocks_per_Second'].rolling(window=ma_windows[window_index], min_periods=1).mean()
         fig.add_trace(
             go.Scatter(
                 x=df_original_display['Accumulated_sync_in_progress_time[s]'],
                 y=df_original_display['Block_height'],
                 name='Block Height (Original)',
-                customdata=df_original_display[['SyncTime_Formatted']],
+                legendgroup='group1',
+                customdata=df_original_display[['SyncTime_Formatted', 'Block_timestamp', 'Block_timestamp_date']],
                 hovertemplate=(
                     f'<b>File</b>: {original_filename}<br>' +
                     '<b>Block Height</b>: %{y}<br>' +
-                    '<b>Sync Time</b>: %{customdata[0]} [%{x:.0f}s]' +
+                    '<b>Block Timestamp</b>: %{customdata[1]:,}s<br>' +
+                    '<b>Block Date</b>: %{customdata[2]}<br>' +
+                    '<b>Sync Time</b>: %{customdata[0]} (%{x:.0f}s)' +
                     '<extra></extra>'
                 )
             ),
@@ -1815,8 +1604,9 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                 x=df_original_display['Accumulated_sync_in_progress_time[s]'],
                 y=df_original_display['Blocks_per_Second'],
                 name='Sync Speed (Original)',
-                line=dict(color=original_bps_color, dash='dot', width=1), # type: ignore
-                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+                legendgroup='group1',
+                line=dict(color=original_bps_color, dash='dot', width=1),
+                hovertemplate='<b>Sync Speed</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
             ),
             secondary_y=True,
         )
@@ -1825,26 +1615,47 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                 x=df_original_display['Accumulated_sync_in_progress_time[s]'],
                 y=df_original_display['BPS_ma'],
                 name='Sync Speed (MA) (Original)',
-                line=dict(color=original_ma_color, dash='solid'), # type: ignore
-                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+                legendgroup='group1',
+                line=dict(color=original_ma_color, dash='solid'),
+                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
             ),
             secondary_y=True,
         )
+        if 'Block_timestamp' in df_original_display.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df_original_display['Accumulated_sync_in_progress_time[s]'],
+                    y=df_original_display['Block_timestamp'],
+                    name='Block Timestamp (Original)',
+                    legendgroup='group1',
+                    line=dict(color=timestamp_color, dash='dash'),
+                    yaxis='y3',
+                    visible='legendonly', # Rejtett alapértelmezetten, a jelmagyarázatból kapcsolható
+                    customdata=df_original_display[['Block_timestamp_date']],
+                    hovertemplate=('<b>Block Timestamp</b>: %{y:,}s<br>' +
+                                   '<b>Block Date</b>: %{customdata[0]}' +
+                                   '<extra></extra>')
+                ),
+                secondary_y=False # This seems counterintuitive, but it's how you assign to a new axis
+            )
 
     # --- Plot Comparison Data if available ---
     if not df_compare_display.empty:
-        df_compare_display['BPS_ma'] = df_compare_display['Blocks_per_Second'].rolling(window=window, min_periods=1).mean()
+        df_compare_display['BPS_ma'] = df_compare_display['Blocks_per_Second'].rolling(window=ma_windows[window_index], min_periods=1).mean()
         fig.add_trace(
                 go.Scatter(
                     x=df_compare_display['Accumulated_sync_in_progress_time[s]'],
                     y=df_compare_display['Block_height'],
                     name='Block Height (Comparison)',
+                    legendgroup='group2',
                     line=dict(color='cyan'),
-                    customdata=df_compare_display[['SyncTime_Formatted']],
+                    customdata=df_compare_display[['SyncTime_Formatted', 'Block_timestamp', 'Block_timestamp_date']],
                     hovertemplate=(
                         f'<b>File</b>: {compare_filename}<br>' +
                         '<b>Block Height</b>: %{y}<br>' +
-                        '<b>Sync Time</b>: %{customdata[0]} [%{x:.0f}s]' +
+                        '<b>Block Timestamp</b>: %{customdata[1]:,}s<br>' +
+                        '<b>Block Date</b>: %{customdata[2]}<br>' +
+                        '<b>Sync Time</b>: %{customdata[0]} (%{x:.0f}s)' +
                         '<extra></extra>'
                     )
                 ),
@@ -1855,8 +1666,9 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     x=df_compare_display['Accumulated_sync_in_progress_time[s]'],
                     y=df_compare_display['Blocks_per_Second'],
                     name='Sync Speed (Comparison)',
+                    legendgroup='group2',
                     line=dict(color='fuchsia', dash='dot', width=1),
-                    hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+                    hovertemplate='<b>Sync Speed</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
                 ),
                 secondary_y=True,
             )
@@ -1865,463 +1677,49 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     x=df_compare_display['Accumulated_sync_in_progress_time[s]'],
                     y=df_compare_display['BPS_ma'],
                     name='Sync Speed (MA) (Comparison)',
+                    legendgroup='group2',
                     line=dict(color='magenta', dash='solid'),
-                    hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
+                    hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} (Blocks/sec)<extra></extra>'
                 ),
                 secondary_y=True,
             )
-    # --- Define graph template before using it ---
-    graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
-        
-    # Create the second figure for Block Height vs. Sync Speed/Time
-    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # Plot Original Data for fig2
-    if not df_original_display.empty:
-        fig2.add_trace(
-            go.Scatter(
-                x=df_original_display['Block_height'],
-                y=df_original_display['Accumulated_sync_in_progress_time[s]'],
-                name='Sync Time (Original)',
-                line=dict(color='#1f77b4'),
-                customdata=df_original_display[['SyncTime_Formatted']],
-                hovertemplate=(
-                    f'<b>File</b>: {original_filename}<br>' +
-                    '<b>Block Height</b>: %{x}<br>' +
-                    '<b>Sync Time</b>: %{customdata[0]} [%{y:.0f}s]' +
-                    '<extra></extra>'
-                )
-            ),
-            secondary_y=False,
-        )
-        fig2.add_trace(
-            go.Scatter(
-                x=df_original_display['Block_height'],
-                y=df_original_display['Blocks_per_Second'],
-                name='Sync Speed (Original)',
-                line=dict(color=original_bps_color, dash='dot', width=1),
-                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
-            ),
-            secondary_y=True,
-        )
-        fig2.add_trace(
-            go.Scatter(
-                x=df_original_display['Block_height'],
-                y=df_original_display['BPS_ma'],
-                name='Sync Speed (MA) (Original)',
-                line=dict(color=original_ma_color, dash='solid'),
-                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
-            ),
-            secondary_y=True,
-        )
-
-    # Plot Comparison Data for fig2 if available
-    if not df_compare_display.empty:
-        fig2.add_trace(
-            go.Scatter(
-                x=df_compare_display['Block_height'],
-                y=df_compare_display['Accumulated_sync_in_progress_time[s]'],
-                name='Sync Time (Comparison)',
-                line=dict(color='cyan'),
-                customdata=df_compare_display[['SyncTime_Formatted']],
-                hovertemplate=(
-                    f'<b>File</b>: {compare_filename}<br>' +
-                    '<b>Block Height</b>: %{x}<br>' +
-                    '<b>Sync Time</b>: %{customdata[0]} [%{y:.0f}s]' +
-                    '<extra></extra>'
-                )
-            ),
-            secondary_y=False,
-        )
-        fig2.add_trace(
-            go.Scatter(
-                x=df_compare_display['Block_height'],
-                y=df_compare_display['Blocks_per_Second'],
-                name='Sync Speed (Comparison)',
-                line=dict(color='fuchsia', dash='dot', width=1),
-                hovertemplate='<b>Sync Speed</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
-            ),
-            secondary_y=True,
-        )
-        fig2.add_trace(
-            go.Scatter(
-                x=df_compare_display['Block_height'],
-                y=df_compare_display['BPS_ma'],
-                name='Sync Speed (MA) (Comparison)',
-                line=dict(color='magenta', dash='solid'),
-                hovertemplate='<b>Sync Speed (MA)</b>: %{y:.2f} [Blocks/sec]<extra></extra>'
-            ),
-            secondary_y=True,
-        )
-
-    # Update layout for fig2
-    fig2.update_layout(
-        title_text=f'Sync Time and Sync Speed vs. Block Height (MA Window: {window})',
-        height=600,
-        hovermode='x unified', hoverlabel=hover_label_style,
-        xaxis_title="<b>Block Height</b>",
-        yaxis_title="<b>Sync in Progress Time [s]</b>",
-        yaxis2_title="<b>Sync Speed [Blocks/sec]</b>",
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
-        template=graph_template,
-        margin=dict(l=80, r=80, t=80, b=120),
-        **background_style
-    )
-
-    # --- Distribution Graph ---
-    bins = dist_bins_values[bins_index]
-    fig_dist_speed = go.Figure()
-    fig_dist_time = go.Figure()
-    fig_dist_speed_count = go.Figure()
-    fig_dist_time_count = go.Figure()
-
-
-    def add_distribution_trace(fig, df, col, name, color, histnorm='probability density', custom_hovertemplate=None, xbins=None):
-        if not df.empty and col in df.columns:
-            data = df[col].dropna()
-            if len(data) > 1:
-                # Histogram
-                trace_args = {
-                    'x': data,
-                    'name': f'{name}',
-                    'marker_color': color,
-                    'opacity': 0.6,
-                    'histnorm': histnorm,
-                    'hovertemplate': custom_hovertemplate or '<b>Range</b>: %{x}<br><b>Density</b>: %{y}<extra></extra>',
-                    'showlegend': True
-                }
-
-                # Use explicit binning if provided, otherwise let Plotly decide (nbinsx)
-                if xbins:
-                    trace_args['xbins'] = xbins
-                    # When using xbins, legend entries for histograms can be duplicated if KDE is also present.
-                    # We can handle this by naming them differently or controlling showlegend.
-                    # For simplicity, we will ensure the name is consistent.
-                else:
-                    trace_args['nbinsx'] = bins
-
-                fig.add_trace(go.Histogram(**trace_args))
-
-                # KDE Curve
-                if len(data) > 1:
-                    try:
-                        kde = gaussian_kde(data)
-                        x_range = np.linspace(data.min(), data.max(), 500)
-                        kde_values = kde(x_range)
-
-                        if histnorm == 'probability density':
-                            # Plot standard KDE for density
-                            fig.add_trace(go.Scatter(
-                                x=x_range, y=kde_values, mode='lines', name=f'{name} (KDE)',
-                                hovertemplate='<b>Value</b>: %{x:.2f}<br><b>Density</b>: %{y:.4f}<extra></extra>',
-                                line=dict(color=color, width=2), showlegend=True
-                            ))
-                        elif histnorm == '':
-                            # --- Visual Scaling for Count Plot to match its own histogram's peak ---
-                            hist_range = None
-                            if xbins:
-                                hist_range = (xbins['start'], xbins['end'])
-
-                            # 1. Generate histogram data for the *current* series to find its max bar height
-                            counts, _ = np.histogram(data, bins=bins, range=hist_range)
-                            max_hist_count = np.max(counts) if len(counts) > 0 else 1
-                            
-                            # 2. Find the peak of the raw KDE curve
-                            max_kde_density = kde_values.max()
-
-                            # 3. Calculate a scaling factor to match the histogram's peak
-                            scaling_factor = max_hist_count / max_kde_density if max_kde_density > 0 else 1
-                            scaled_kde_values = kde_values * scaling_factor if scaling_factor > 0 else kde_values
-
-                            fig.add_trace(go.Scatter(
-                                x=x_range, y=scaled_kde_values, mode='lines', name=f'{name} (Fit)',
-                                hovertemplate=f'<b>Value</b>: %{{x:.2f}}<br><b>Estimated Count Fit ({name})</b>: %{{y:.2f}}<extra></extra>',
-                                line=dict(color=color, width=2, dash='dash'), showlegend=True
-                            ))
-
-                    except Exception as e:
-                        # Catch potential errors during KDE calculation (e.g., singular matrix)
-                        print(f"Could not generate KDE for {name} - {col}: {e}")
-
-
-    # --- Define explicit bins for consistent histograms ---
-    # For Sync Speed
-    speed_data_to_concat = []
-    if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns:
-        speed_data_to_concat.append(df_original_display['Blocks_per_Second'])
-    if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns:
-        speed_data_to_concat.append(df_compare_display['Blocks_per_Second'])
-    all_speed_data = pd.concat(speed_data_to_concat).dropna() if speed_data_to_concat else pd.Series(dtype=float)
-
-    speed_bins = None
-    if not all_speed_data.empty:
-        speed_bins = dict(start=all_speed_data.min(), end=all_speed_data.max(), size=(all_speed_data.max() - all_speed_data.min()) / bins)
-
-    # For Time Delta
-    time_delta_data_to_concat = []
-    if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns:
-        time_delta_data_to_concat.append(df_original_display['Accumulated_sync_in_progress_time[s]'].diff())
-    if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns:
-        time_delta_data_to_concat.append(df_compare_display['Accumulated_sync_in_progress_time[s]'].diff())
-    all_time_delta_data = pd.concat(time_delta_data_to_concat).dropna() if time_delta_data_to_concat else pd.Series(dtype=float)
-
-    time_delta_bins = None
-    if not all_time_delta_data.empty:
-        time_delta_bins = dict(start=all_time_delta_data.min(), end=all_time_delta_data.max(), size=(all_time_delta_data.max() - all_time_delta_data.min()) / bins)
-
-    # Sync Speed Distribution
-    add_distribution_trace(fig_dist_speed, df_original_display, 'Blocks_per_Second', 'Original', original_ma_color, xbins=speed_bins)
-    if not df_compare_display.empty:
-        add_distribution_trace(fig_dist_speed, df_compare_display, 'Blocks_per_Second', 'Comparison', 'magenta', xbins=speed_bins)
-
-    # Sync Time Delta Distribution
-    if not df_original_display.empty:
-        time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
-        if len(time_delta_orig) > 1:
-            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_orig}), 'TimeDelta', 'Original', original_ma_color, xbins=time_delta_bins)
-
-    if not df_compare_display.empty:
-        time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
-        if len(time_delta_comp) > 1:
-            add_distribution_trace(fig_dist_time, pd.DataFrame({'TimeDelta': time_delta_comp}), 'TimeDelta', 'Comparison', 'magenta', xbins=time_delta_bins)
-
-
-    # --- Layout Updates for Distribution plots ---
-    fig_dist_speed.update_layout(
-        title_text=f'Sync Speed Distribution (Bins: {bins})',
-        height=500,
-        bargap=0.1,
-        template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
-        hovermode='x unified',
-        hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
-        font_size=12,
-        xaxis_title="Sync Speed [Blocks/sec]",
-        yaxis_title="Density",
-        **background_style
-    )
-
-    fig_dist_time.update_layout(
-        title_text=f'Sync Time Delta Distribution (Bins: {bins})',
-        height=500,
-        bargap=0.1,
-        template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
-        hovermode='x unified',
-        hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=150), # Further increased bottom margin for legend
-        font_size=12,
-        xaxis_title="Time Between Samples [s]",
-        yaxis_title="Density",
-        **background_style
-    )
-
-    fig_dist_speed_count.update_layout(
-        title_text=f'Sync Speed Distribution (Counts, Bins: {bins})',
-        height=500,
-        bargap=0.1,
-        template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
-        hovermode='x unified',
-        hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=150),
-        font_size=12,
-        xaxis_title="Sync Speed [Blocks/sec]",
-        yaxis_title="Count",
-        yaxis=dict(title=dict(text="Count", standoff=20), rangemode='tozero'),
-        yaxis2=dict(
-            title='Percentage (%)',
-            overlaying='y',
-            side='right',
-            showgrid=False,
-            tickformat='.1f',
-            ticksuffix='%',
-            title_standoff=25, # type: ignore
-            anchor='y',  # Anchors this axis to the main y-axis to align zero points
-            rangemode='tozero',
-        ),
-        barmode='group', # Group histograms side-by-side
-        **background_style
-    )
-
-    fig_dist_time_count.update_layout(
-        title_text=f'Sync Time Delta Distribution (Counts, Bins: {bins})',
-        height=500,
-        bargap=0.1,
-        template=graph_template,
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
-        hovermode='x unified',
-        hoverlabel=hover_label_style,
-        margin=dict(l=80, r=80, t=80, b=150),
-        font_size=12,
-        xaxis_title="Time Between Samples [s]",
-        yaxis_title="Count",
-        yaxis=dict(title=dict(text="Count", standoff=20), rangemode='tozero'),
-        yaxis2=dict(
-            title='Percentage (%)',
-            overlaying='y',
-            side='right',
-            showgrid=False,
-            tickformat='.1f',
-            ticksuffix='%',
-            title_standoff=25, # type: ignore
-            anchor='y',  # Anchors this axis to the main y-axis to align zero points
-            rangemode='tozero',
-        ),
-        barmode='group', # Group histograms side-by-side
-        **background_style
-    )
-
-    # --- SPEED DISTRIBUTION ---
-    # --- Original Data ---
-    if not df_original_display.empty and 'Blocks_per_Second' in df_original_display.columns:
-        speed_data_orig = df_original_display['Blocks_per_Second'].dropna()
-        if not speed_data_orig.empty:
-            # Bar chart (Count)
-            counts, bin_edges = np.histogram(speed_data_orig, bins=bins, range=(speed_bins['start'], speed_bins['end']) if speed_bins else None)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-            fig_dist_speed_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Original', marker_color=original_ma_color, opacity=0.6, hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Count</b>: %{y}<extra></extra>'))
-            # Fit curve
-            try:
-                if len(speed_data_orig) > 1:
-                    kde = gaussian_kde(speed_data_orig)
-                    x_range = np.linspace(speed_data_orig.min(), speed_data_orig.max(), 500)
-                    kde_values = kde(x_range)
-                    max_hist_count = np.max(counts)
-                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
-                    fig_dist_speed_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Original (Fit)', line=dict(color=original_ma_color, width=2, dash='dash'), hovertemplate='<b>Speed</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
-            except Exception as e:
-                print(f"Could not generate KDE fit for Original Speed: {e}")
-            # Percentage curve
-            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
-            fig_dist_speed_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Original (%)', line=dict(color='orange', width=2), hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
-
-    # --- Comparison Data ---
-    if not df_compare_display.empty and 'Blocks_per_Second' in df_compare_display.columns:
-        speed_data_comp = df_compare_display['Blocks_per_Second'].dropna()
-        if not speed_data_comp.empty:
-            # Bar chart (Count)
-            counts, bin_edges = np.histogram(speed_data_comp, bins=bins, range=(speed_bins['start'], speed_bins['end']) if speed_bins else None)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-            fig_dist_speed_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Comparison', marker_color='magenta', opacity=0.6, hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Count</b>: %{y}<extra></extra>'))
-            # Fit curve
-            try:
-                if len(speed_data_comp) > 1:
-                    kde = gaussian_kde(speed_data_comp)
-                    x_range = np.linspace(speed_data_comp.min(), speed_data_comp.max(), 500)
-                    kde_values = kde(x_range)
-                    max_hist_count = np.max(counts)
-                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
-                    fig_dist_speed_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Comparison (Fit)', line=dict(color='magenta', width=2, dash='dash'), hovertemplate='<b>Speed</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
-            except Exception as e:
-                print(f"Could not generate KDE fit for Comparison Speed: {e}")
-            # Percentage curve
-            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
-            fig_dist_speed_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Comparison (%)', line=dict(color='cyan', width=2), hovertemplate='<b>Speed Range</b>: %{x:.2f}<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
-
-    # --- TIME DELTA DISTRIBUTION ---
-    # --- Original Data ---
-    if not df_original_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_original_display.columns:
-        time_delta_orig = df_original_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
-        if not time_delta_orig.empty:
-            # Bar chart (Count)
-            counts, bin_edges = np.histogram(time_delta_orig, bins=bins, range=(time_delta_bins['start'], time_delta_bins['end']) if time_delta_bins else None)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-            fig_dist_time_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Original', marker_color=original_ma_color, opacity=0.6, hovertemplate='<b>Time Range</b>: %{x:.2f}s<br><b>Count</b>: %{y}<extra></extra>'))
-            # Fit curve
-            try:
-                if len(time_delta_orig) > 1:
-                    kde = gaussian_kde(time_delta_orig)
-                    x_range = np.linspace(time_delta_orig.min(), time_delta_orig.max(), 500)
-                    kde_values = kde(x_range)
-                    max_hist_count = np.max(counts)
-                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
-                    fig_dist_time_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Original (Fit)', line=dict(color=original_ma_color, width=2, dash='dash'), hovertemplate='<b>Time Delta</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
-            except Exception as e:
-                print(f"Could not generate KDE fit for Original Time Delta: {e}")
-            # Percentage curve
-            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
-            fig_dist_time_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Original (%)', line=dict(color='orange', width=2), hovertemplate='<b>ΔTime Range</b>: %{x:.2f}s<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
-
-    # --- Comparison Data ---
-    if not df_compare_display.empty and 'Accumulated_sync_in_progress_time[s]' in df_compare_display.columns:
-        time_delta_comp = df_compare_display['Accumulated_sync_in_progress_time[s]'].diff().dropna()
-        if not time_delta_comp.empty:
-            # Bar chart (Count)
-            counts, bin_edges = np.histogram(time_delta_comp, bins=bins, range=(time_delta_bins['start'], time_delta_bins['end']) if time_delta_bins else None)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-            fig_dist_time_count.add_trace(go.Bar(x=bin_centers, y=counts, name='Comparison', marker_color='magenta', opacity=0.6, hovertemplate='<b>Time Range</b>: %{x:.2f}s<br><b>Count</b>: %{y}<extra></extra>'))
-            # Fit curve
-            try:
-                if len(time_delta_comp) > 1:
-                    kde = gaussian_kde(time_delta_comp)
-                    x_range = np.linspace(time_delta_comp.min(), time_delta_comp.max(), 500)
-                    kde_values = kde(x_range)
-                    max_hist_count = np.max(counts)
-                    scaled_kde_values = kde_values * (max_hist_count / kde_values.max())
-                    fig_dist_time_count.add_trace(go.Scatter(x=x_range, y=scaled_kde_values, mode='lines', name='Comparison (Fit)', line=dict(color='magenta', width=2, dash='dash'), hovertemplate='<b>Time Delta</b>: %{x:.2f}<br><b>Fit</b>: %{y:.2f}<extra></extra>'))
-            except Exception as e:
-                print(f"Could not generate KDE fit for Comparison Time Delta: {e}")
-            # Percentage curve
-            percentages = (counts / counts.sum() * 100) if counts.sum() > 0 else counts
-            fig_dist_time_count.add_trace(go.Scatter(x=bin_centers, y=percentages, yaxis='y2', mode='lines+markers', name='Comparison (%)', line=dict(color='cyan', width=2), hovertemplate='<b>ΔTime Range</b>: %{x:.2f}s<br><b>Percentage</b>: %{y:.2f}%<extra></extra>'))
-
-    # --- Final layout update for count plots to fix yaxis2 range ---
-    # This ensures the percentage axis doesn't rescale when traces are hidden.
-    max_percent_speed = max((trace.y.max() for trace in fig_dist_speed_count.data if hasattr(trace, 'y') and trace.y is not None and trace.yaxis == 'y2'), default=100)
-    if max_percent_speed > 0:
-        fig_dist_speed_count.update_layout(yaxis2_range=[0, max_percent_speed * 1.05])
-
-    max_percent_time = max((trace.y.max() for trace in fig_dist_time_count.data if hasattr(trace, 'y') and trace.y is not None and trace.yaxis == 'y2'), default=100)
-    if max_percent_time > 0:
-        fig_dist_time_count.update_layout(yaxis2_range=[0, max_percent_time * 1.05])
-
-    # --- Final layout update for count plots to fix xaxis range ---
-    # This prevents the secondary y-axis from adding a margin on the right.
-    if speed_bins and speed_bins.get('start') is not None and speed_bins.get('end') is not None:
-        # Add a small padding to the range
-        padding = (speed_bins['end'] - speed_bins['start']) * 0.01
-        fig_dist_speed_count.update_layout(xaxis_range=[speed_bins['start'] - padding, speed_bins['end'] + padding])
-
-    if time_delta_bins and time_delta_bins.get('start') is not None and time_delta_bins.get('end') is not None:
-        # Add a small padding to the range
-        padding = (time_delta_bins['end'] - time_delta_bins['start']) * 0.01
-        # Ensure padding is not zero if range is zero
-        if padding == 0: padding = 0.1
-        fig_dist_time_count.update_layout(xaxis_range=[time_delta_bins['start'] - padding, time_delta_bins['end'] + padding])
-
-
-    # --- Update Y-Axes for fig2 with specific colors for clarity ---
-    fig2.update_yaxes(
-        title_text="<b>Sync in Progress Time [s]</b>",
-        title_standoff=20, secondary_y=False,
-        color="#1f77b4",
-        linecolor="#1f77b4",
-        gridcolor='rgba(28, 119, 180, 0.3)',
-        gridwidth=1,
-        showgrid=True
-    )
-    fig2.update_yaxes(
-        title_text="<b>Sync Speed [Blocks/sec]</b>",
-        title_standoff=25, secondary_y=True,
-        color=original_bps_color,
-        linecolor=original_bps_color,
-        gridcolor=f'rgba({int(original_bps_color[1:3], 16)}, {int(original_bps_color[3:5], 16)}, {int(original_bps_color[5:7], 16)}, 0.3)',
-        gridwidth=1,
-        showgrid=True
-    )
+        if 'Block_timestamp' in df_compare_display.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df_compare_display['Accumulated_sync_in_progress_time[s]'],
+                    y=df_compare_display['Block_timestamp'],
+                    name='Block Timestamp (Comparison)',
+                    legendgroup='group2',
+                    line=dict(color='#ff9896', dash='dash'), # Lighter red for comparison
+                    yaxis='y3',
+                    visible='legendonly', # Rejtett alapértelmezetten
+                    customdata=df_compare_display[['Block_timestamp_date']],
+                    hovertemplate=('<b>Block Timestamp</b>: %{y:,}s<br>' +
+                                   '<b>Block Date</b>: %{customdata[0]}' +
+                                   '<extra></extra>')
+                ),
+                secondary_y=False
+            )
 
     # Update layout and axes
+    graph_template = 'plotly_dark' if theme != 'light' else 'plotly'
     fig.update_layout(
-        title_text=f'Block Height and Sync Speed vs. Sync Time (MA Window: {window})',
+        title_text=f'Block Height vs. Sync Time (MA Window: {ma_windows[window_index]})',
         height=600,
         hovermode='x unified', hoverlabel=hover_label_style,
         xaxis_showspikes=True, xaxis_spikemode='across', xaxis_spikedash='dot',
-        yaxis_showspikes=True, yaxis_spikedash='dot',
-        legend=dict(orientation="v", yanchor="top", y=-0.2, xanchor="left", x=0, traceorder='grouped'),
+        yaxis_showspikes=True, yaxis_spikedash='dot', yaxis2_showspikes=True, yaxis2_spikedash='dot',
+        legend=dict(orientation="h",
+                    yanchor="top",
+                    y=-0.2,
+                    xanchor="left",
+                    x=0,
+                    itemclick='toggle',
+                    itemdoubleclick='toggleothers',
+                    tracegroupgap=50, # Space between groups (Original vs Comparison)
+                    ),
         template=graph_template,
-        margin=dict(l=80, r=80, t=80, b=120),
+        margin=dict(l=80, r=0, t=80, b=80),
         yaxis2=dict(
             side='right',
             overlaying='y',
@@ -2329,13 +1727,24 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             # Add some padding to the right of the secondary y-axis labels
             # to prevent them from being too close to the edge.
             title=dict(standoff=15),
+            automargin=True,
+        ),
+        yaxis3=dict(
+            title="<b>Block Timestamp (s)</b>",
+            overlaying='y',
+            side='left',
+            anchor='free',
+            position=0,
+            visible=False, # Initially hidden
+            color=timestamp_color,
+            showgrid=False
         ),
         **background_style
     )
     # --- Update Y-Axes with specific colors for clarity ---
-    # Primary Y-axis [Block Height] - uses default color (blue/cyan)
+    # Primary Y-axis (Block Height) - uses default color (blue/cyan)
     fig.update_yaxes(
-        title_text="<b>Block Height</b>", title_standoff=20,
+        title_text="<b>Block Height</b>",
         secondary_y=False,
         color="#1f77b4", # Sets tick and title font color
         linecolor="#1f77b4", # Sets axis line color
@@ -2345,7 +1754,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     )
     # Secondary Y-axis (Sync Speed) - uses orange color to match its traces
     fig.update_yaxes(
-        title_text="<b>Sync Speed [Blocks/sec]</b>", title_standoff=25,
+        title_text="<b>Sync Speed (Blocks/sec)</b>",
         secondary_y=True,
         color=original_bps_color, # Sets tick and title font color
         linecolor=original_bps_color, # Sets axis line color
@@ -2370,15 +1779,14 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         tick_text = [f"{int(val):,} sec<br>({format_seconds(val)})" for val in tick_values]
         fig.update_xaxes(tickvals=tick_values, ticktext=tick_text)
 
-    fig.update_xaxes(title_text="Sync in Progress Time [s]")
+    fig.update_xaxes(title_text="Sync in Progress Time [s]", automargin=True)
 
     # --- Prepare outputs for dropdowns ---
-    # The order of outputs is determined by Dash. We get it from ctx.outputs_grouping.
-    # Use ctx.outputs_list which is more reliable for pattern-matching callbacks.
-    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[13]]
-    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_list[14]]
-    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[15]]
-    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_list[16]]
+    # The order of outputs is determined by Dash. We can get it from ctx.outputs_list.
+    output_start_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[2]]
+    output_start_vals = [data_map[item['id']['prefix']]['start_block'] for item in ctx.outputs_list[3]]
+    output_end_opts = [data_map[item['id']['prefix']]['options'] for item in ctx.outputs_list[4]]
+    output_end_vals = [data_map[item['id']['prefix']]['end_block'] for item in ctx.outputs_list[5]]
 
     # --- Update total time display and metrics tables ---
     table_title_original = f"Original: {original_filename}"
@@ -2393,15 +1801,19 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
     # --- Generate Raw Data Table ---
     table_children = []
     table_style = {'display': 'none'}
+    controls_style = {'display': 'none'}
     if show_data_table:
         table_style = {'display': 'block'}
+        controls_style = {'display': 'block'}
         data_col_names = {
-            'Accumulated_sync_in_progress_time[s]': 'Sync Time [s]',
-            'SyncTime_Formatted': 'Sync Time [Formatted]',
-            'Blocks_per_Second': 'Sync Speed [Blocks/sec]'
+            'Block_timestamp': 'Block Timestamp (s)',
+            'Accumulated_sync_in_progress_time[s]': 'Sync Time (s)',
+            'SyncTime_Formatted': 'Sync Time (Formatted)',
+            'Blocks_per_Second': 'Sync Speed (Blocks/sec)'
         }
-        cols_to_show = ['Block_height'] + list(data_col_names.keys())
-
+        # Filter columns based on selection
+        cols_to_show = ['Block_height'] + [col for col in data_col_names.keys() if col in selected_columns]
+        present_display_names = {k: v for k, v in data_col_names.items() if k in selected_columns}
         # Check if dataframes have been processed and have the necessary columns
         original_valid = not df_original_display.empty and all(c in df_original_display.columns for c in cols_to_show)
         compare_valid = not df_compare_display.empty and all(c in df_compare_display.columns for c in cols_to_show)
@@ -2409,7 +1821,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         if original_valid and compare_valid:
             # --- Merged Table Logic for Fixed Header ---
             df_orig_subset = df_original_display[cols_to_show].rename(columns=data_col_names)
-            df_comp_subset = df_compare_display[cols_to_show].rename(columns=data_col_names)
+            df_comp_subset = df_compare_display[cols_to_show].rename(columns=data_col_names) # type: ignore
             df_merged = pd.merge(
                 df_orig_subset,
                 df_comp_subset,
@@ -2422,23 +1834,29 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             # --- Build Header Table ---
             left_border_style = {'borderLeft': '1px solid black'}
             # Define column widths for synchronization. This ensures header and body columns align.
-            col_widths = ['16%'] + ['12%', '18%', '12%'] * 2
+            num_data_cols = len(present_display_names)
+            if num_data_cols > 0:
+                block_height_width = 16
+                data_col_width = (100 - block_height_width) / (num_data_cols * 2)
+                col_widths = [f'{block_height_width}%'] + [f'{data_col_width}%'] * num_data_cols * 2
+            else:
+                col_widths = ['100%']
             col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
 
             # --- Build Combined Header Table ---
             file_name_header_row = html.Tr([
                 html.Th(""),  # Spacer for Block Height
-                html.Th(f"Original: {original_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all'}),
-                html.Th(f"Comparison: {compare_filename}", colSpan=len(data_col_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all', **left_border_style})
+                html.Th(f"Original: {original_filename}", colSpan=len(present_display_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all'}),
+                html.Th(f"Comparison: {compare_filename}", colSpan=len(present_display_names), className="text-center", style={'fontWeight': 'normal', 'wordBreak': 'break-all', **left_border_style})
             ])
 
             comparison_headers = [
-                create_header_with_tooltip(col, col, style=left_border_style if i == 0 else None)
-                for i, col in enumerate(data_col_names.values())
+                create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp (s)' else col, style=left_border_style if i == 0 else None)
+                for i, col in enumerate(present_display_names.values())
             ]
             column_name_header_row = html.Tr(
                 [create_header_with_tooltip("Block Height", "Block Height")] +
-                [create_header_with_tooltip(col, col) for col in data_col_names.values()] +
+                [create_header_with_tooltip(col, col) for col in present_display_names.values()] +
                 comparison_headers
             )
 
@@ -2455,17 +1873,23 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                 row_data = [html.Td(f"{int(row['Block Height']):,}" if pd.notna(row['Block Height']) else "")]
                 
                 numeric_metrics_info = {
-                    'Sync Time [s]': {'higher_is_better': False},
-                    'Sync Speed [Blocks/sec]': {'higher_is_better': True}
+                    'Sync Time (s)': {'higher_is_better': False},
+                    'Sync Speed (Blocks/sec)': {'higher_is_better': True}
                 }
 
                 # Add original columns' cells
-                for display_name in data_col_names.values():
+                for display_name in present_display_names.values():
                     orig_val = row.get(f"{display_name}_orig")
 
                     # Format the main value
                     if pd.isna(orig_val):
                         cell_content = [""]
+                    elif display_name == 'Block Timestamp (s)' and pd.notna(orig_val):
+                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(orig_val))
+                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        cell_content = [f"{int(orig_val):,}", html.Br(), f"({date_str})"]
+                    elif display_name == 'Sync Time (s)' and pd.notna(orig_val):
+                        cell_content = [f"{orig_val:.3f}"]
                     elif isinstance(orig_val, float):
                         cell_content = [f"{orig_val:.2f}"]
                     else:
@@ -2479,14 +1903,14 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
-                                if display_name == 'Sync Time [s]':
+                                if display_name == 'Sync Time (s)':
                                     diff_str = f" ({diff:+.2f}s)"
                                 else:
                                     diff_str = f" ({diff:+.2f})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
-                    elif display_name == 'Sync Time [Formatted]':
-                        orig_s_val = row.get('Sync Time [s]_orig')
-                        comp_s_val = row.get('Sync Time [s]_comp')
+                    elif display_name == 'Sync Time (Formatted)':
+                        orig_s_val = row.get('Sync Time (s)_orig')
+                        comp_s_val = row.get('Sync Time (s)_comp')
                         if pd.notna(orig_s_val) and pd.notna(comp_s_val):
                             diff = orig_s_val - comp_s_val
                             color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
@@ -2497,7 +1921,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     row_data.append(html.Td(cell_content))
 
                 # Add comparison columns' cells
-                for i, display_name in enumerate(data_col_names.values()):
+                for i, display_name in enumerate(present_display_names.values()):
                     cell_style = {'borderLeft': '1px solid black'} if i == 0 else {}
                     
                     comp_val = row.get(f"{display_name}_comp")
@@ -2505,6 +1929,12 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     # Format the main value
                     if pd.isna(comp_val):
                         cell_content = [""]
+                    elif display_name == 'Block Timestamp (s)' and pd.notna(comp_val):
+                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(comp_val))
+                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        cell_content = [f"{int(comp_val):,}", html.Br(), f"({date_str})"]
+                    elif display_name == 'Sync Time (s)' and pd.notna(comp_val):
+                        cell_content = [f"{comp_val:.3f}"]
                     elif isinstance(comp_val, float):
                         cell_content = [f"{comp_val:.2f}"]
                     else:
@@ -2518,14 +1948,14 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
-                                if display_name == 'Sync Time [s]':
+                                if display_name == 'Sync Time (s)':
                                     diff_str = f" ({diff:+.2f}s)"
                                 else:
                                     diff_str = f" ({diff:+.2f})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
-                    elif display_name == 'Sync Time [Formatted]':
-                        orig_s_val = row.get('Sync Time [s]_orig')
-                        comp_s_val = row.get('Sync Time [s]_comp')
+                    elif display_name == 'Sync Time (Formatted)':
+                        orig_s_val = row.get('Sync Time (s)_orig')
+                        comp_s_val = row.get('Sync Time (s)_comp')
                         if pd.notna(orig_s_val) and pd.notna(comp_s_val):
                             diff = comp_s_val - orig_s_val
                             color_class = "text-success" if diff < 0 else "text-danger" if diff != 0 else ""
@@ -2549,18 +1979,22 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
 
         elif original_valid:
             # Single table
-            col_names = {'Block_height': 'Block Height', **data_col_names}
+            col_names = {'Block_height': 'Block Height', **present_display_names}
             df_orig_table = df_original_display[cols_to_show].rename(columns=col_names)
 
             # --- Title (Non-scrollable) ---
             table_children.append(html.H6(f"Original: {original_filename}", style={'wordBreak': 'break-all'}))
 
             # --- Define column widths and create Colgroup ---
-            col_widths = ['25%', '20%', '35%', '20%']
+            num_data_cols = len(present_display_names)
+            if num_data_cols > 0:
+                col_widths = ['25%'] + [f'{75 / num_data_cols}%'] * num_data_cols
+            else:
+                col_widths = ['100%']
             col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
 
             # --- Header Table ---
-            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, col) for col in df_orig_table.columns]))]
+            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp (s)' else col) for col in df_orig_table.columns]))]
             header_table_style = {
                 'tableLayout': 'fixed', 'width': '100%',
                 'position': 'sticky', 'top': 0, 'zIndex': 2, # type: ignore
@@ -2576,6 +2010,12 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     val = row.get(col)
                     if pd.isna(val):
                         row_data.append(html.Td(""))
+                    elif col == 'Block Timestamp (s)' and pd.notna(val):
+                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(val))
+                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        row_data.append(html.Td([f"{int(val):,}", html.Br(), f"({date_str})"]))
+                    elif col == 'Sync Time (s)' and pd.notna(val):
+                        row_data.append(html.Td(f"{val:.3f}"))
                     elif col == 'Block Height' and pd.notna(val):
                         row_data.append(html.Td(f"{int(val):,}"))
                     elif isinstance(val, float):
@@ -2594,13 +2034,17 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
             table_children.append(scrollable_div)
         elif compare_valid:
             # Single table for comparison data
-            col_names = {'Block_height': 'Block Height', **data_col_names}
+            col_names = {'Block_height': 'Block Height', **present_display_names}
             df_comp_table = df_compare_display[cols_to_show].rename(columns=col_names)
 
             table_children.append(html.H6(f"Comparison: {compare_filename}", style={'wordBreak': 'break-all'}))
-            col_widths = ['25%', '20%', '35%', '20%']
+            num_data_cols = len(present_display_names)
+            if num_data_cols > 0:
+                col_widths = ['25%'] + [f'{75 / num_data_cols}%'] * num_data_cols
+            else:
+                col_widths = ['100%']
             col_group = html.Colgroup([html.Col(style={'width': w}) for w in col_widths])
-            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, col) for col in df_comp_table.columns]))]
+            header_table_children = [html.Thead(html.Tr([create_header_with_tooltip(col, 'Block Timestamp' if col == 'Block Timestamp (s)' else col) for col in df_comp_table.columns]))]
             header_table_style = {
                 'tableLayout': 'fixed', 'width': '100%',
                 'position': 'sticky', 'top': 0, 'zIndex': 2,
@@ -2614,6 +2058,12 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                     val = row.get(col)
                     if pd.isna(val):
                         row_data.append(html.Td(""))
+                    elif col == 'Block Timestamp (s)' and pd.notna(val):
+                        utc_date = SIGNUM_GENESIS_TIMESTAMP + timedelta(seconds=int(val))
+                        date_str = utc_date.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        row_data.append(html.Td([f"{int(val):,}", html.Br(), f"({date_str})"]))
+                    elif col == 'Sync Time (s)' and pd.notna(val):
+                        row_data.append(html.Td(f"{val:.3f}"))
                     elif col == 'Block Height' and pd.notna(val):
                         row_data.append(html.Td(f"{int(val):,}"))
                     elif isinstance(val, float):
@@ -2627,16 +2077,7 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
         else:
             table_children = [html.P("No data to display in table.")]
 
-    # Create titles with icons
-    title1 = create_chart_title_with_icon(f'Block Height and Sync Speed vs. Sync Time (MA Window: {window})', 'progress-graph-title')
-    title2 = create_chart_title_with_icon(f'Sync Time and Sync Speed vs. Block Height (MA Window: {window})', 'blockheight-vs-speed-graph-title')
-    title3 = create_chart_title_with_icon(f'Sync Speed Distribution (Bins: {bins})', 'distribution-graph-speed-title')
-    title4 = create_chart_title_with_icon(f'Sync Time Delta Distribution (Bins: {bins})', 'distribution-graph-time-delta-title')
-    title5 = create_chart_title_with_icon(f'Sync Speed Distribution (Counts, Bins: {bins})', 'distribution-graph-speed-count-title')
-    title6 = create_chart_title_with_icon(f'Sync Time Delta Distribution (Counts, Bins: {bins})', 'distribution-graph-time-delta-count-title')
-
-
-    return fig, fig2, fig_dist_speed, fig_dist_time, fig_dist_speed_count, fig_dist_time_count, title1, title2, title3, title4, title5, title6, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style
+    return fig, summary_table, output_start_opts, output_start_vals, output_end_opts, output_end_vals, {}, table_children, table_style, controls_style
 
 @app.callback(
     Output('action-feedback-store', 'data', allow_duplicate=True),
@@ -2687,7 +2128,7 @@ def show_tooltip_modal(n_clicks):
     if '-' in metric_id and any(metric_id.startswith(p) for p in ['Original-', 'Comparison-']):
         metric_name = metric_id.split('-', 1)[1]
     else:
-        metric_name = re.sub(r'-\d+$', '', metric_id)
+        metric_name = metric_id
     info = tooltip_texts.get(metric_name, {})
     title = info.get('title', 'Information')
     body_text = info.get('body', 'No details available for this metric.')
@@ -2705,7 +2146,7 @@ def show_tooltip_modal(n_clicks):
      Input("action-feedback-modal-close", "n_clicks")],
     [State("action-feedback-modal", "is_open")],
     prevent_initial_call=True,
-)
+) # type: ignore
 def show_action_feedback_modal(feedback_data, n_clicks, is_open):
     ctx = dash.callback_context
     triggered_id = ctx.triggered_id
@@ -2763,7 +2204,7 @@ def update_unsaved_changes_badge(unsaved_data, ids):
         State('unsaved-changes-store', 'data')
     ],
     prevent_initial_call=True
-)
+) # type: ignore
 def add_original_metadata(n_clicks, key, value, store_data, unsaved_data):
     if not n_clicks or not key or value is None:
         raise dash.exceptions.PreventUpdate
@@ -2782,7 +2223,7 @@ def add_original_metadata(n_clicks, key, value, store_data, unsaved_data):
     [State('original-data-store', 'data'),
      State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
-)
+) # type: ignore
 def update_original_metadata(values, store_data, unsaved_data):
     ctx = dash.callback_context
     if not ctx.triggered_id:
@@ -2805,7 +2246,7 @@ def update_original_metadata(values, store_data, unsaved_data):
     [State('compare-data-store', 'data'),
      State('unsaved-changes-store', 'data')],
     prevent_initial_call=True
-)
+) # type: ignore
 def update_compare_metadata(values, store_data, unsaved_data):
     ctx = dash.callback_context
     if not ctx.triggered_id:
@@ -2832,7 +2273,7 @@ def update_compare_metadata(values, store_data, unsaved_data):
         State('unsaved-changes-store', 'data')
     ],
     prevent_initial_call=True
-)
+) # type: ignore
 def add_compare_metadata(n_clicks, key, value, store_data, unsaved_data):
     if not n_clicks or not key or value is None:
         raise dash.exceptions.PreventUpdate
@@ -2878,7 +2319,7 @@ def write_csv_new(store_data, filter_range, start_block, end_block):
     
     # Save to a new file
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
         os.makedirs(saved_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         base_filename = os.path.basename(filename)
@@ -2945,7 +2386,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
     df.to_csv(output, sep=';', index=False)
 
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
         os.makedirs(saved_dir, exist_ok=True)
         base_filename = os.path.basename(filename)
         base, ext = os.path.splitext(base_filename)
@@ -2975,7 +2416,8 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
      Output('unsaved-changes-store', 'data', allow_duplicate=True),
-     Output('reset-upload-store', 'data', allow_duplicate=True)], # type: ignore
+     Output('save-callback-output', 'figure', allow_duplicate=True),
+     Output('reset-upload-store', 'data', allow_duplicate=True)],
     [Input({'type': 'save-as-button', 'prefix': dash.dependencies.ALL}, 'n_clicks'),
      Input({'type': 'save-overwrite-button', 'prefix': dash.dependencies.ALL}, 'n_clicks')],
     [State('original-data-store', 'data'),
@@ -2984,7 +2426,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
      State({'type': 'start-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
      State({'type': 'end-block-dropdown', 'prefix': dash.dependencies.ALL}, 'value'),
      State('unsaved-changes-store', 'data')],
-    prevent_initial_call=True
+    prevent_initial_call=True # type: ignore
 )
 def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filter_range_values, start_block_vals, end_block_vals, unsaved_data): # type: ignore
     triggered_id = dash.callback_context.triggered_id
@@ -3032,7 +2474,8 @@ def save_csv(n_clicks_as, n_clicks_overwrite, original_data, compare_data, filte
         if 'Error' not in message:
             new_unsaved_data[prefix] = False
             upload_id_to_reset = 'upload-original-progress' if prefix == 'Original' else 'upload-compare-progress'
-    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, upload_id_to_reset
+
+    return {'title': 'Save to CSV', 'body': message}, new_unsaved_data, {}, upload_id_to_reset
 
 @app.callback(
     Output('theme-switch', 'value'),
@@ -3052,7 +2495,7 @@ def load_initial_theme(stored_theme):
     Input('theme-switch', 'value'),
     prevent_initial_call=True
 )
-def switch_theme(is_dark):
+def switch_theme(is_dark): # type: ignore
     if is_dark:
         return 'dark', dbc.themes.DARKLY
     return 'light', dbc.themes.BOOTSTRAP
@@ -3094,8 +2537,8 @@ def update_metadata_display(original_data, compare_data):
             if key in tooltip_texts:
                 # Make the ID unique by prefixing it with the card type (Original/Comparison)
                 unique_metric_id = f"{title_prefix}-{key}"
-                info_icon = html.Span([ # type: ignore
-                    "\u00A0",  # Non-breaking space
+                info_icon = html.Span([
+                    " ",
                     html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                 ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 key_with_icon.append(info_icon)
@@ -3146,9 +2589,9 @@ def update_metadata_display(original_data, compare_data):
             [
                 html.Div([
                     html.B("Start Block Height:"),
-                    html.Span([ # type: ignore
-                        "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Start Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                    html.Span([
+                        " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Start Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div(dcc.Dropdown(id={'type': 'start-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select start block"), style={'width': '50%'})
             ],
@@ -3160,9 +2603,9 @@ def update_metadata_display(original_data, compare_data):
             [
                 html.Div([
                     html.B("End Block Height:"),
-                    html.Span([ # type: ignore
-                        "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-End Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                    html.Span([
+                        " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-End Block Height'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div(dcc.Dropdown(id={'type': 'end-block-dropdown', 'prefix': title_prefix}, clearable=False, placeholder="Select end block"), style={'width': '50%'})
             ],
@@ -3177,9 +2620,9 @@ def update_metadata_display(original_data, compare_data):
                 dbc.Col(
                     html.Div([
                         dbc.Button("Add", id={'type': 'add-metadata-button', 'prefix': title_prefix}, color="primary", size="sm", className="w-100"),
-                        html.Span([ # type: ignore
-                            "\u00A0", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                        ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Add Metadata'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0)
+                        html.Span([
+                            " ", html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
+                        ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Add Metadata'}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
                     ], className="d-flex align-items-center"), width=4)
             ], align="center", className="g-2") # g-2 for gutter
         ], className="p-2")
@@ -3190,16 +2633,16 @@ def update_metadata_display(original_data, compare_data):
                 # Left side: View and Clear controls
                 dbc.Col([
                     dbc.Button("Reset View", id={'type': 'reset-view-button', 'prefix': title_prefix}, color="secondary", size="sm", className="me-2"),
-                    html.Span([ # type: ignore
-                        "\u00A0",
+                    html.Span([
+                        " ",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Reset View'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Clear CSV", id={'type': 'clear-csv-button', 'prefix': title_prefix}, color="warning", size="sm", className="me-2"),
-                    html.Span([ # type: ignore
-                        "\u00A0",
+                    html.Span([
+                        " ",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                    ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Clear CSV'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
+                    ], id={'type': 'info-icon', 'metric': 'Average & Filter CSV'}, style={'cursor': 'pointer'}, title='Click for more info'),
                 ], width="auto", className="d-flex align-items-center"),
                 # Right side: Save controls
                 dbc.Col([
@@ -3210,20 +2653,20 @@ def update_metadata_display(original_data, compare_data):
                         inline=True,
                         className="me-1 custom-checklist"
                     ),
-                    html.Span([ # type: ignore
-                        "\u00A0",
+                    html.Span([
+                        " ",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save Filtered Range'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Save", id={'type': 'save-overwrite-button', 'prefix': title_prefix}, size="sm", color="primary", className="me-1"),
-                    html.Span([ # type: ignore
-                        "\u00A0",
+                    html.Span([
+                        " ",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                     html.Div("|", className="text-muted mx-2"),
                     dbc.Button("Save As...", id={'type': 'save-as-button', 'prefix': title_prefix}, size="sm", color="success", className="me-1"), # type: ignore
                     html.Span([
-                        "\u00A0",  # Non-breaking space
+                        " ",
                         html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
                     ], id={'type': 'info-icon', 'metric': f'{title_prefix}-Save As...'}, style={'cursor': 'pointer'}, title='Click for more info', n_clicks=0), # type: ignore
                 ], width="auto", className="d-flex align-items-center justify-content-end")
@@ -3256,7 +2699,7 @@ def update_metadata_display(original_data, compare_data):
     [State('original-data-store', 'data'),
      State('compare-data-store', 'data'),
      State('unsaved-changes-store', 'data')],
-    prevent_initial_call=True
+    prevent_initial_call=True # type: ignore
 )
 def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
     ctx = dash.callback_context
@@ -3280,48 +2723,303 @@ def delete_metadata_item(n_clicks, original_data, compare_data, unsaved_data):
 
     raise dash.exceptions.PreventUpdate
 
-app.clientside_callback( # type: ignore
-    dash.ClientsideFunction(namespace='clientside', function_name='reset_upload_component'),
-    Output('upload-original-progress', 'contents', allow_duplicate=True),
-    Input('discard-original-button', 'n_clicks'),
+app.clientside_callback(
+    """
+    function(upload_id) {
+        if (!upload_id) {
+            return window.dash_clientside.no_update;
+        }
+        // This is a bit of a hack to reset the dcc.Upload component.
+        // It finds the 'x' (remove) button inside the upload component and clicks it.
+        // This is more reliable than trying to set `contents` to null from the server.
+        const uploadElement = document.getElementById(upload_id);
+        if (uploadElement) {
+            // The actual clickable element is often a div or span inside the main component
+            const removeButton = uploadElement.querySelector('div > div > span');
+            if (removeButton) {
+                removeButton.click();
+            }
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output('reset-upload-store', 'data', allow_duplicate=True),
+    Input('reset-upload-store', 'data'),
     prevent_initial_call=True
 )
 # --- Callback to apply custom dark theme styles to dropdowns ---
 
-# --- Callback for saving HTML report ---
-app.clientside_callback( # type: ignore
-    dash.ClientsideFunction(namespace='clientside', function_name='report_generator'),
-    Output('html-content-store', 'data', allow_duplicate=True),
+# --- Callbacks for saving HTML report ---
+app.clientside_callback(
+    """
+    async function(n_clicks, slider_value_index, figure) {
+        if (!n_clicks) {
+            // This is the initial call or a callback update where the button wasn't clicked.
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+
+        try {
+            const rootElement = document.documentElement;
+            if (!rootElement) {
+                return ['CLIENTSIDE_ERROR: root element (html) not found.', null];
+            }
+            // Clone the container to avoid modifying the live DOM
+            const clone = rootElement.cloneNode(true);
+
+            const isDarkTheme = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+            // --- Replace interactive elements with static text ---
+
+            // 1. Dropdowns
+            clone.querySelectorAll('div[id*="start-block-dropdown"], div[id*="end-block-dropdown"]').forEach(clonedDropdown => {
+                const originalDropdown = document.getElementById(clonedDropdown.id);
+                const wrapper = clonedDropdown.parentElement;
+                if (originalDropdown && wrapper && wrapper.parentElement) {
+                    const originalDropdownValue = originalDropdown.querySelector('.Select-value-label, .Select__single-value');
+                    const valueText = originalDropdownValue ? originalDropdownValue.textContent : 'N/A';
+                    const staticEl = document.createElement('div');
+                    staticEl.textContent = valueText;
+                    staticEl.className = 'text-end';
+                    staticEl.style.width = '50%';
+                    staticEl.style.fontSize = '0.875em';
+                    staticEl.style.color = 'var(--bs-body-color)';
+                    wrapper.parentElement.replaceChild(staticEl, wrapper);
+                }
+            });
+
+            // 2. Metadata Inputs
+            clone.querySelectorAll('input[id*="metadata-input"]').forEach(input => {
+                if (input.parentElement) {
+                    const valueText = input.value || 'N/A';
+                    const staticEl = document.createElement('div');
+                    staticEl.textContent = valueText;
+                    staticEl.className = 'text-end text-muted';
+                    staticEl.style.fontSize = '0.875em';
+                    input.parentElement.replaceChild(staticEl, input);
+                }
+            });
+
+            // 3. Slider
+            const ma_windows = [10, 100, 200, 300, 400, 500];
+            const window_size = ma_windows[slider_value_index];
+            const sliderContainer = clone.querySelector('#ma-slider-container');
+            if (sliderContainer) {
+                const staticEl = document.createElement('div');
+                staticEl.textContent = `Moving Average Window: ${window_size} blocks`;
+                staticEl.className = 'mt-3'; // Add some margin
+                staticEl.style.fontWeight = 'bold';
+                sliderContainer.parentNode.replaceChild(staticEl, sliderContainer);
+            }
+
+            // --- Remove all interactive/unnecessary elements ---
+            const selectorsToRemove = [
+                // General UI controls
+                '#save-button', '#theme-switch', '.bi-sun-fill', '.bi-moon-stars-fill',
+                '#show-data-table-switch-container', '#original-upload-container', '#compare-upload-container', 'span[id*="info-icon"]',
+                'script', '#loading-overlay',
+                '#_dash-dev-tools-ui-container', // Dash Dev Tools main container
+                // Dash developer/debug panels and error overlays (Dash 3.x)
+                '#_dash-debug-menu',
+                '.dash-debug-menu',
+                '.dash-debug-menu__button',
+                '.dash-debug-menu__title',
+                '.dash-debug-menu__version',
+                '.dash-debug-menu__server',
+                '.dash-debug-menu__status',
+                '.dash-debug-menu__icon',
+                '.dash-debug-menu__indicator',
+                '.dash-debug-menu__status--success',
+                '.dash-debug-menu__status--error',
+                '.bi-arrow-bar-left',
+                '.bi-arrow-left',
+                '.bi-arrow-return-left',
+                '.dash-error-message',
+                '.dash-fe-error__title',
+                '.dash-fe-error__message',
+                '.dash-fe-error__stack',
+                '.dash-dev-tools-menu',
+                '.dash-dev-tools-menu__button',
+                '.dash-dev-tools-menu__title',
+                '.dash-dev-tools-menu__version',
+                '.dash-dev-tools-menu__server',
+                // Reload and discard buttons
+                '#reload-original-button', '#reload-compare-button',
+                '#discard-original-button', '#discard-compare-button',
+                // Individual metadata controls
+                'span[id*="delete-metadata-button"]',
+                'span[id*="unsaved-changes-badge"]'
+            ];
+            // Remove any undefined or empty selectors to avoid JS errors
+            const validSelectorsToRemove = selectorsToRemove.filter(s => typeof s === 'string' && s.length > 0);
+            const extraArrowSelectors = [
+                '.dash-debug-menu__outer'
+                ,'.dash-debug-menu__outer--expanded'
+                ,'.dash-debug-menu__toggle'
+                ,'.dash-debug-menu__toggle--expanded'
+            ];
+            const allSelectorsToRemove = validSelectorsToRemove.concat(extraArrowSelectors);
+            clone.querySelectorAll(allSelectorsToRemove.join(', ')).forEach(el => el.remove());
+
+            // --- Remove entire rows for certain controls ---
+            const rowSelectorsToRemove = [
+                'button[id*="add-metadata-button"]', // The "Add" button and its row
+                'button[id*="reset-view-button"]', // The entire bar with Reset, Clear, and Save buttons
+                'button[id*="save-overwrite-button"]'
+            ];
+            clone.querySelectorAll(rowSelectorsToRemove.join(', ')).forEach(el => {
+                const parentRow = el.closest('.list-group-item');
+                if (parentRow) parentRow.remove();
+            });
+
+            // --- Convert Plotly graph to a static image ---
+            const graphDiv = clone.querySelector('#progress-graph');
+            const originalGraphDiv = document.getElementById('progress-graph');
+
+            if (graphDiv && originalGraphDiv && window.Plotly && figure) {
+                const tempDiv = document.createElement('div');
+                // Position it off-screen
+                tempDiv.style.position = 'absolute';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = originalGraphDiv.offsetWidth + 'px';
+                tempDiv.style.height = originalGraphDiv.offsetHeight + 'px';
+                document.body.appendChild(tempDiv);
+
+                try {
+                    const data = JSON.parse(JSON.stringify(figure.data));
+                    const layout = JSON.parse(JSON.stringify(figure.layout));
+
+                    if (isDarkTheme) {
+                        layout.paper_bgcolor = '#222529'; // Darkly theme background
+                        layout.plot_bgcolor = '#222529';
+                    }
+
+                    // Increase font sizes for better readability in the saved image
+                    const fontSizeIncrease = 6; // Increase font size by 6 points
+                    if (layout.title) {
+                        layout.title.font = layout.title.font || {};
+                        layout.title.font.size = (layout.title.font.size || 16) + fontSizeIncrease;
+                    }
+                    if (layout.xaxis) {
+                        layout.xaxis.title = layout.xaxis.title || {};
+                        layout.xaxis.title.font = layout.xaxis.title.font || {};
+                        layout.xaxis.title.font.size = (layout.xaxis.title.font.size || 12) + fontSizeIncrease + 2; // Axis titles a bit larger
+                        layout.xaxis.tickfont = layout.xaxis.tickfont || {};
+                        layout.xaxis.tickfont.size = (layout.xaxis.tickfont.size || 12) + fontSizeIncrease;
+                    }
+                    if (layout.yaxis) {
+                        layout.yaxis.title = layout.yaxis.title || {};
+                        layout.yaxis.title.font = layout.yaxis.title.font || {};
+                        layout.yaxis.title.font.size = (layout.yaxis.title.font.size || 12) + fontSizeIncrease + 2;
+                        layout.yaxis.tickfont = layout.yaxis.tickfont || {};
+                        layout.yaxis.tickfont.size = (layout.yaxis.tickfont.size || 12) + fontSizeIncrease;
+                    }
+                    if (layout.yaxis2) {
+                        layout.yaxis2.title = layout.yaxis2.title || {};
+                        layout.yaxis2.title.font = layout.yaxis2.title.font || {};
+                        layout.yaxis2.title.font.size = (layout.yaxis2.title.font.size || 12) + fontSizeIncrease + 2;
+                        layout.yaxis2.tickfont = layout.yaxis2.tickfont || {};
+                        layout.yaxis2.tickfont.size = (layout.yaxis2.tickfont.size || 12) + fontSizeIncrease;
+                    }
+                    if (layout.legend) {
+                        layout.legend.font = layout.legend.font || {};
+                        layout.legend.font.size = (layout.legend.font.size || 10) + fontSizeIncrease + 2;
+                    }
+
+                    await window.Plotly.newPlot(tempDiv, data, layout);
+
+                    const renderWidth = originalGraphDiv.offsetWidth * 1.4;
+                    const renderHeight = originalGraphDiv.offsetHeight * 1.4;
+
+                    const dataUrl = await window.Plotly.toImage(tempDiv, {
+                        format: 'png',
+                        height: renderHeight,
+                        width: renderWidth,
+                        scale: 2 // 1.4x base size with 2x scale gives a sharp 2.8x total resolution
+                    });
+
+                    const img = document.createElement('img');
+                    img.src = dataUrl;
+                    img.style.width = '100%'; // Fit the image to its container
+                    img.style.height = 'auto';
+                    graphDiv.parentNode.replaceChild(img, graphDiv);
+                } catch (e) {
+                    console.error('Plotly.toImage failed:', e);
+                    const p = document.createElement('p');
+                    p.innerText = '[Error converting chart to image]';
+                    p.style.color = 'red';
+                    graphDiv.parentNode.replaceChild(p, graphDiv);
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+            } else if (graphDiv && graphDiv.parentNode) {
+                if (graphDiv && graphDiv.parentNode) {
+                    const p = document.createElement('p');
+                    p.innerText = '[Chart not included in this report version.]';
+                    graphDiv.parentNode.replaceChild(p, graphDiv);
+                }
+            }
+
+            // --- Fetch and embed CSS ---
+            let cssText = '';
+            const styleSheets = Array.from(document.styleSheets);
+            const cssPromises = styleSheets.map(sheet => {
+                try {
+                    // For external stylesheets, fetch the content
+                    if (sheet.href) {
+                        return fetch(sheet.href)
+                            .then(response => response.ok ? response.text() : '')
+                            .catch(() => '');
+                    } else if (sheet.cssRules) {
+                        return Promise.resolve(Array.from(sheet.cssRules).map(rule => rule.cssText).join('\\n'));
+                    }
+                } catch (e) {
+                    // Silently fail on security errors for cross-origin stylesheets
+                }
+                return undefined; // Return undefined for sheets that can't be processed
+            }).filter(p => p); // Filter out undefined promises
+
+            const cssContents = await Promise.all(cssPromises);
+            cssText = cssContents.join('\\n'); // Use '\\n' for JS newlines
+
+            // --- Escape backticks and other problematic characters ---
+            const cleanCssText = cssText.replace(/`/g, '\\`');
+
+            // Construct the full HTML document
+            const fullHtml = `
+                <!DOCTYPE html>
+                <html lang="en" data-bs-theme="${isDarkTheme ? 'dark' : 'light'}"><head><meta charset="utf-8"><title>Sync Progress Report</title><style>${cleanCssText}</style></head>
+                <body>${clone.querySelector('body').innerHTML}</body>
+                </html>
+            `;
+
+            return [fullHtml, {}];
+        } catch (e) {
+            alert('Caught an error in callback: ' + e.message);
+            return ['CLIENTSIDE_ERROR: ' + e.message + '\\n' + e.stack, {}];
+        }
+    }
+    """,
+    [Output('html-content-store', 'data'),
+     Output('save-callback-output', 'figure', allow_duplicate=True)],
     Input('save-button', 'n_clicks'),
-    [State('ma-window-slider-1', 'value'),
-     State('distribution-bins-slider-1', 'value'),
-     State('progress-graph', 'figure'),
-     State('blockheight-vs-speed-graph', 'figure'),
-     State('distribution-graph-speed', 'figure'),
-     State('distribution-graph-time-delta', 'figure'),
-     State('distribution-graph-speed-count', 'figure'),
-     State('distribution-graph-time-delta-count', 'figure')],
+    [State('ma-window-slider-progress', 'value'),
+     State('progress-graph', 'figure')], # type: ignore
     prevent_initial_call=True
 )
 
 @app.callback(
     [Output('action-feedback-store', 'data', allow_duplicate=True),
-     Output('reports-filepath-store', 'data', allow_duplicate=True)], # type: ignore
-    [Input('html-content-store', 'data'),
-     Input('clientside-script-store', 'data')],
+     Output('reports-filepath-store', 'data', allow_duplicate=True)],
+    Input('html-content-store', 'data'),
     prevent_initial_call=True
-)
-def save_report_on_server(data, script_loaded):
-    if not data or not script_loaded:
-        if data and 'CLIENTSIDE_ERROR' in data.get('content', ''):
+) # type: ignore
+def save_report_on_server(html_content):
+    if not html_content or 'CLIENTSIDE_ERROR' in html_content:
+        if html_content:
             return {'title': 'Error Saving Reports', 'body': "A client-side error occurred during report generation."}, None
         raise dash.exceptions.PreventUpdate
-    html_content = data
-    # --- Replace MA slider placeholder in the generated HTML ---
-    # The clientside callback no longer does this, so we do it here on the server.
     # Generate a dynamic filename with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    html_content = data.get('content')
     filename = f"sync_progress_reports_{timestamp}.html"
     try:
         reports_dir = os.path.join(SCRIPT_DIR, "reports")
@@ -3329,22 +3027,16 @@ def save_report_on_server(data, script_loaded):
         filepath = os.path.join(reports_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html_content)
-            return {'title': 'Reports Saved', 'body': f"Reports successfully saved to: {filepath}"}, filepath
+        return {'title': 'Reports Saved', 'body': f"Reports successfully saved to: {filepath}"}, filepath
     except Exception as e:
-            return {'title': 'Error Saving Reports', 'body': f"An error occurred while saving the file on the server: {e}"}, None
-
-app.clientside_callback(
-    dash.ClientsideFunction(namespace='clientside', function_name='clientside_script_loaded'), # type: ignore
-    Output('clientside-script-store', 'data'),
-    Input('main-container', 'children') # Triggered once the layout is loaded
-)
+        return {'title': 'Error Saving Reports', 'body': f"An error occurred while saving the file on the server: {e}"}, None
 
 @app.callback(
     Output('reports-filepath-store', 'data', allow_duplicate=True),
     Input('open-report-button', 'n_clicks'),
     State('reports-filepath-store', 'data'),
     prevent_initial_call=True
-)
+) # type: ignore
 def open_report_in_browser(n_clicks, filepath):
     if not n_clicks or not filepath:
         raise dash.exceptions.PreventUpdate
@@ -3355,24 +3047,71 @@ def open_report_in_browser(n_clicks, filepath):
         traceback.print_exc()
     return dash.no_update
 
+# --- Callback to update graph trace names on hover ---
 app.clientside_callback(
-    ClientsideFunction(namespace='clientside', function_name='sync_sliders'),
-    [
-        Output('ma-window-slider-1', 'value'),
-        Output('ma-window-slider-2', 'value'),
-    ],
-    [
-        Input('ma-window-slider-1', 'value'),
-        Input('ma-window-slider-2', 'value'),
-    ]
-)
+    """
+    function(hoverData, existingFigure) {
+        if (!existingFigure || !existingFigure.data) {
+            return window.dash_clientside.no_update;
+        }
 
-app.clientside_callback(
-    ClientsideFunction(namespace='clientside', function_name='sync_sliders'),
-    [Output(f'distribution-bins-slider-{i}', 'value') for i in range(1, 5)],
-    [Input(f'distribution-bins-slider-{i}', 'value') for i in range(1, 5)]
-)
+        try {
+            // Create a deep copy to avoid modifying the original figure in state
+            const newFigure = JSON.parse(JSON.stringify(existingFigure));
 
+            if (!hoverData || !hoverData.points || hoverData.points.length === 0) {
+                // Not hovering, or leaving the graph area, so reset names
+                newFigure.data.forEach(trace => {
+                    if (trace && trace._original_name) {
+                        trace.name = trace._original_name;
+                    }
+                });
+                return [newFigure, window.dash_clientside.no_update];
+            }
+
+                        // Store original names if they don't exist
+            newFigure.data.forEach(trace => {
+                if (trace && typeof trace._original_name === 'undefined') {
+                    trace._original_name = trace.name;
+                }
+            });
+
+            // Create a map of trace index to the new value from hoverData
+                        const updates = {};
+            hoverData.points.forEach(point => {
+                if (point && typeof point.y !== 'undefined' && point.y !== null) {
+                    const y = point.y;
+                    let formattedY = 'N/A';
+                    if (typeof y === 'number') {
+                        formattedY = Number.isInteger(y) ? y.toLocaleString() : y.toFixed(2);
+                    } else {
+                        formattedY = String(y);
+                    }
+                    updates[point.curveNumber] = formattedY;
+                }
+            });
+            // Construct the new names array
+                        newFigure.data.forEach((trace, i) => {
+                if (!trace) return;
+                const value = updates[i];
+                const originalName = trace._original_name || trace.name || '';
+                trace.name = value !== undefined ? `${originalName}: ${value}` : originalName;
+            });
+            return [newFigure, window.dash_clientside.no_update];
+        } catch (e) {
+            console.error("Clientside callback error:", e);
+            console.log("Error occurred with hoverData:", hoverData);
+            console.log("Error occurred with existingFigure:", existingFigure);
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+    }
+    """,
+    [Output('progress-graph', 'figure', allow_duplicate=True),
+     Output('loading-state-store', 'data', allow_duplicate=True)],
+    [Input('progress-graph', 'hoverData')],
+    [State('progress-graph', 'figure')],
+    prevent_initial_call=True
+)
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8050)
+    app.run(debug=True, port=8051)
