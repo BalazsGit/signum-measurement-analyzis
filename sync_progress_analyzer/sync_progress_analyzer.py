@@ -1008,8 +1008,13 @@ def create_combined_summary_table(df_original, df_compare, title_original, title
                     color_class = "text-danger" # Red
                 
                 # Format difference string
+                percent_diff_str = ""
+                if original_raw != 0:
+                    percent_diff = (diff / abs(original_raw)) * 100
+                    percent_diff_str = f", {percent_diff:+.1f}%"
+
                 if metric == 'Total Blocks Synced':
-                    diff_str = f"{diff:+,}"
+                    diff_str = f"{diff:+,} ({percent_diff:+.1f}%)"
                 elif metric == 'Total Sync in Progress Time [s]':
                     sign = "+" if diff > 0 else "-"
                     diff_str = f"{sign}{format_seconds(abs(diff))} [{sign}{int(abs(diff))}s]"
@@ -2479,10 +2484,15 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
+                                percent_diff_str = ""
+                                if comp_val != 0:
+                                    percent_diff = (diff / abs(comp_val)) * 100
+                                    percent_diff_str = f", {percent_diff:+.1f}%"
+
                                 if display_name == 'Sync Time [s]':
-                                    diff_str = f" ({diff:+.2f}s)"
+                                    diff_str = f" ({diff:+.2f}s{percent_diff_str})"
                                 else:
-                                    diff_str = f" ({diff:+.2f})"
+                                    diff_str = f" ({diff:+.2f}{percent_diff_str})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
                     elif display_name == 'Sync Time [Formatted]':
                         orig_s_val = row.get('Sync Time [s]_orig')
@@ -2518,10 +2528,15 @@ def update_progress_graph_and_time(window_index, bins_index, original_data, comp
                             is_better = (diff > 0) if numeric_metrics_info[display_name]['higher_is_better'] else (diff < 0)
                             color_class = "text-success" if is_better else "text-danger" if diff != 0 else ""
                             if color_class:
+                                percent_diff_str = ""
+                                if orig_val != 0:
+                                    percent_diff = (diff / abs(orig_val)) * 100
+                                    percent_diff_str = f", {percent_diff:+.1f}%"
+
                                 if display_name == 'Sync Time [s]':
-                                    diff_str = f" ({diff:+.2f}s)"
+                                    diff_str = f" ({diff:+.2f}s{percent_diff_str})"
                                 else:
-                                    diff_str = f" ({diff:+.2f})"
+                                    diff_str = f" ({diff:+.2f}{percent_diff_str})"
                                 cell_content.append(html.Span(diff_str, className=f"small {color_class} fw-bold"))
                     elif display_name == 'Sync Time [Formatted]':
                         orig_s_val = row.get('Sync Time [s]_orig')
@@ -2878,7 +2893,7 @@ def write_csv_new(store_data, filter_range, start_block, end_block):
     
     # Save to a new file
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
         os.makedirs(saved_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         base_filename = os.path.basename(filename)
@@ -2945,7 +2960,7 @@ def write_csv_overwrite(store_data, filter_range, start_block, end_block):
     df.to_csv(output, sep=';', index=False)
 
     try:
-        saved_dir = os.path.join(SCRIPT_DIR, "measurements")
+        saved_dir = os.path.join(SCRIPT_DIR, "measurements", "saved")
         os.makedirs(saved_dir, exist_ok=True)
         base_filename = os.path.basename(filename)
         base, ext = os.path.splitext(base_filename)
@@ -3080,24 +3095,19 @@ def update_metadata_display(original_data, compare_data):
             ], align="center", justify="between")
         )
 
-        # Define preferred order for display to ensure consistency
-        preferred_order = [
-            'Signum Version', 'Hostname', 'OS Name', 'OS Version', 'OS Architecture',
-            'Java Version', 'Available Processors', 'Max Memory (MB)', 'Total RAM (MB)',
-            'Database Type', 'Database Version'
-        ]
-
-        list_group_items = []
-
-        def create_list_item(key, value):
+        def create_metadata_item(key, value):
+            """Creates a single metadata item with label, value, and delete button."""
             key_with_icon = [html.B(f"{key}:")]
             if key in tooltip_texts:
                 # Make the ID unique by prefixing it with the card type (Original/Comparison)
                 unique_metric_id = f"{title_prefix}-{key}"
-                info_icon = html.Span([ # type: ignore
-                    "\u00A0",  # Non-breaking space
-                    html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'}),
-                ], id={'type': 'info-icon', 'metric': unique_metric_id}, style={'cursor': 'pointer', 'marginLeft': '5px'}, title='Click for more info', n_clicks=0) # type: ignore
+                info_icon = html.Span(
+                    [html.I(className="bi bi-info-circle-fill text-info align-middle", style={'fontSize': '1.1em'})],
+                    id={'type': 'info-icon', 'metric': unique_metric_id},
+                    style={'cursor': 'pointer', 'marginLeft': '5px'},
+                    title='Click for more info',
+                    n_clicks=0
+                )
                 key_with_icon.append(info_icon)
 
             delete_button = html.Span([
@@ -3111,32 +3121,46 @@ def update_metadata_display(original_data, compare_data):
             )
 
             return dbc.ListGroupItem(
-                [
-                    html.Div(key_with_icon, style={'display': 'flex', 'alignItems': 'center'}),
-                    html.Div([
-                        dbc.Input(
-                            id={'type': 'metadata-input', 'prefix': title_prefix, 'key': key},
-                            value=str(value), type='text', className="text-end text-muted", size="sm",
-                            style={'border': 'none', 'backgroundColor': 'transparent', 'boxShadow': 'none', 'padding': '0', 'margin': '0', 'height': 'auto'},
-                            debounce=True),
-                        delete_button
-                    ], className="d-flex align-items-center")
-                ],
-                className="d-flex justify-content-between align-items-center p-2"
+                className="d-flex justify-content-between align-items-center p-2",
+                children=[
+                    # Key (label) part, prevent wrapping
+                    html.Div(key_with_icon, className="d-flex align-items-center", style={'whiteSpace': 'nowrap', 'marginRight': '10px'}),
+                    # Value (input) part, allow it to grow
+                    html.Div(
+                        className="d-flex align-items-center w-100",
+                        style={'flex-grow': 1, 'min-width': 0},
+                        children=[
+                            dbc.Input(
+                                id={'type': 'metadata-input', 'prefix': title_prefix, 'key': key},
+                                value=str(value), type='text', className="text-end text-muted", size="sm",
+                                style={'border': 'none', 'backgroundColor': 'transparent', 'boxShadow': 'none', 'padding': '0', 'margin': '0', 'height': 'auto', 'width': '100%'},
+                                debounce=True
+                            ),
+                            delete_button
+                        ]
+                    )
+                ]
             )
 
+        # Define preferred order for display to ensure consistency
+        preferred_order = [
+            'Signum Version', 'Hostname', 'OS Name', 'OS Version', 'OS Architecture',
+            'Java Version', 'Available Processors', 'Max Memory (MB)', 'Total RAM (MB)',
+            'Database Type', 'Database Version'
+        ]
+
+        list_group_items = []
         # Add preferred keys first, in the specified order
         for key in preferred_order:
             if key in metadata:
-                list_group_items.append(create_list_item(key, metadata[key]))
+                list_group_items.append(create_metadata_item(key, metadata[key]))
 
         # Add any other keys that were not in the preferred list
-        # This makes the function robust to future additions
         for key, value in metadata.items():
             if key not in preferred_order:
-                list_group_items.append(create_list_item(key, metadata[key]))
+                list_group_items.append(create_metadata_item(key, value))
 
-        card_body = dbc.ListGroup(list_group_items, flush=True)
+        card_body = dbc.ListGroup(list_group_items, flush=True) # Reverted to ListGroup
         return dbc.Card([card_header, card_body])
 
     def create_controls_card(data, title_prefix):
